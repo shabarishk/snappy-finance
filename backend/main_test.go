@@ -6,6 +6,21 @@ import (
 	"testing"
 )
 
+func TestLoadConfigDemoData(t *testing.T) {
+	t.Setenv("APP_PASSWORD", "test-password-with-12")
+	t.Setenv("SESSION_SECRET", "a-session-secret-with-at-least-32-characters")
+	t.Setenv("APP_ENCRYPTION_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+	t.Setenv("DEMO_DATA", "true")
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if !cfg.demoData {
+		t.Fatal("demo data should be enabled")
+	}
+}
+
 func TestEncryptDecrypt(t *testing.T) {
 	key := []byte("0123456789abcdef0123456789abcdef")
 	encrypted, err := encrypt(key, "access-token-value")

@@ -73,6 +73,7 @@ button { cursor: pointer; }
 .error-message { color: #a13e37; }
 .alert.error-message { background: #fff2f0; }
 .success-message { background: #edf8f1; color: #287253; }
+.demo-banner { background: #fff7e2; color: #856421; }
 footer { color: #9aa39e; font-size: 10px; padding: 6px 0 16px; }
 .login-screen, .loading-screen { align-items: center; background: radial-gradient(ellipse at 50% 10%, #edf7f0, #f8f9f6 58%); display: flex; justify-content: center; min-height: 100vh; padding: 20px; }
 .loading-screen { color: var(--muted); font-size: 13px; }

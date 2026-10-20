@@ -10,6 +10,7 @@ type Account = {
   subtype: string;
   current_balance: number | null;
   iso_currency_code: string | null;
+  demo_data: boolean;
 };
 
 type Transaction = {
@@ -220,7 +221,7 @@ export default function App() {
         <header className="topbar">
           <div><p className="eyebrow">YOUR FINANCES</p><h1>Overview</h1></div>
           <div className="topbar-actions">
-            <button className="secondary-button" onClick={() => void syncNow()} disabled={busy || accounts.length === 0}>
+            <button className="secondary-button" onClick={() => void syncNow()} disabled={busy || !accounts.some((account) => !account.demo_data)}>
               <RefreshCw size={16} className={busy ? "spin" : ""} /> Sync
             </button>
             <button className="primary-button" onClick={() => void connectAccount()} disabled={busy}>
@@ -229,6 +230,9 @@ export default function App() {
           </div>
         </header>
 
+        {accounts.some((account) => account.demo_data) && (
+          <div className="alert demo-banner">Demo data — these fictional accounts and transactions are for local testing only.</div>
+        )}
         {error && <div className="alert error-message">{error}</div>}
         {notice && <div className="alert success-message">{notice}</div>}
 
@@ -271,7 +275,7 @@ export default function App() {
               {accounts.map((account) => (
                 <div className="account-row" key={account.account_id}>
                   <span className="account-icon"><Landmark size={18} /></span>
-                  <div className="account-info"><strong>{account.official_name || account.name}</strong><span>{account.type}{account.subtype ? ` · ${account.subtype}` : ""}{account.mask ? ` ···· ${account.mask}` : ""}</span></div>
+                  <div className="account-info"><strong>{account.official_name || account.name}</strong><span>{account.type}{account.subtype ? ` · ${account.subtype}` : ""}{account.mask ? ` ···· ${account.mask}` : ""}{account.demo_data ? " · DEMO" : ""}</span></div>
                   <strong className="account-balance">{money(account.current_balance, account.iso_currency_code)}</strong>
                 </div>
               ))}

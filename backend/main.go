@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"snappy-finance/backend/webassets"
 )
 
 type config struct {
@@ -32,6 +33,7 @@ type config struct {
 	plaidClientID string
 	plaidSecret   string
 	syncInterval  time.Duration
+	demoData      bool
 }
 
 type app struct {
@@ -60,6 +62,11 @@ func main() {
 	if err := initializeSchema(ctx, db); err != nil {
 		log.Fatalf("initialize database schema: %v", err)
 	}
+	if cfg.demoData {
+		if err := seedDemoData(ctx, db, cfg.encryptionKey); err != nil {
+			log.Fatalf("seed demo data: %v", err)
+		}
+	}
 
 	a := &app{
 		cfg:       cfg,
@@ -79,6 +86,7 @@ func main() {
 	mux.Handle("POST /api/plaid/sync", a.requireAuth(http.HandlerFunc(a.syncNow)))
 	mux.Handle("GET /api/accounts", a.requireAuth(http.HandlerFunc(a.listAccounts)))
 	mux.Handle("GET /api/transactions", a.requireAuth(http.HandlerFunc(a.listTransactions)))
+	mux.Handle("/", webassets.Handler())
 
 	server := &http.Server{
 		Addr:              cfg.addr,
@@ -96,6 +104,7 @@ func main() {
 
 func loadConfig() (config, error) {
 	var cfg config
+	var err error
 	cfg.addr = env("HTTP_ADDR", ":8080")
 	cfg.databaseURL = os.Getenv("DATABASE_URL")
 	cfg.appPassword = os.Getenv("APP_PASSWORD")
@@ -103,6 +112,12 @@ func loadConfig() (config, error) {
 	cfg.plaidClientID = os.Getenv("PLAID_CLIENT_ID")
 	cfg.plaidSecret = os.Getenv("PLAID_SECRET")
 	cfg.syncInterval = 6 * time.Hour
+	if value := os.Getenv("DEMO_DATA"); value != "" {
+		cfg.demoData, err = strconv.ParseBool(value)
+		if err != nil {
+			return cfg, errors.New("DEMO_DATA must be true or false")
+		}
+	}
 
 	if cfg.appPassword == "" {
 		return cfg, errors.New("APP_PASSWORD is required")
@@ -296,9 +311,13 @@ func (a *app) syncNow(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) listAccounts(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.db.Query(r.Context(), `
-		SELECT account_id, name, official_name, mask, type, subtype, current_balance, iso_currency_code
-		FROM accounts ORDER BY name`)
+		SELECT accounts.account_id, accounts.name, accounts.official_name, accounts.mask, accounts.type,
+		       accounts.subtype, accounts.current_balance, accounts.iso_currency_code, plaid_items.demo_data
+		FROM accounts
+		JOIN plaid_items USING (item_id)
+		ORDER BY accounts.name`)
 	if err != nil {
+		log.Printf("query accounts: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not load accounts")
 		return
 	}
@@ -306,13 +325,15 @@ func (a *app) listAccounts(w http.ResponseWriter, r *http.Request) {
 	accounts := make([]account, 0)
 	for rows.Next() {
 		var item account
-		if err := rows.Scan(&item.AccountID, &item.Name, &item.OfficialName, &item.Mask, &item.Type, &item.Subtype, &item.CurrentBalance, &item.Currency); err != nil {
+		if err := rows.Scan(&item.AccountID, &item.Name, &item.OfficialName, &item.Mask, &item.Type, &item.Subtype, &item.CurrentBalance, &item.Currency, &item.DemoData); err != nil {
+			log.Printf("scan account row: %v", err)
 			writeError(w, http.StatusInternalServerError, "could not load accounts")
 			return
 		}
 		accounts = append(accounts, item)
 	}
 	if err := rows.Err(); err != nil {
+		log.Printf("iterate account rows: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not load accounts")
 		return
 	}
@@ -321,12 +342,13 @@ func (a *app) listAccounts(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) listTransactions(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.db.Query(r.Context(), `
-		SELECT transaction_id, account_id, name, merchant_name, amount, transaction_date,
+		SELECT transaction_id, account_id, name, merchant_name, amount, transaction_date::text,
 		       pending, category_primary, category_detailed, iso_currency_code
 		FROM transactions
 		ORDER BY transaction_date DESC, transaction_id
 		LIMIT 500`)
 	if err != nil {
+		log.Printf("query transactions: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not load transactions")
 		return
 	}
@@ -336,12 +358,14 @@ func (a *app) listTransactions(w http.ResponseWriter, r *http.Request) {
 		var item transaction
 		if err := rows.Scan(&item.TransactionID, &item.AccountID, &item.Name, &item.MerchantName, &item.Amount,
 			&item.Date, &item.Pending, &item.CategoryPrimary, &item.CategoryDetailed, &item.Currency); err != nil {
+			log.Printf("scan transaction row: %v", err)
 			writeError(w, http.StatusInternalServerError, "could not load transactions")
 			return
 		}
 		transactions = append(transactions, item)
 	}
 	if err := rows.Err(); err != nil {
+		log.Printf("iterate transaction rows: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not load transactions")
 		return
 	}
@@ -376,7 +400,7 @@ func (a *app) refreshAccounts(ctx context.Context, itemID, accessToken string) e
 }
 
 func (a *app) syncAll(ctx context.Context) error {
-	rows, err := a.db.Query(ctx, "SELECT item_id FROM plaid_items ORDER BY item_id")
+	rows, err := a.db.Query(ctx, "SELECT item_id FROM plaid_items WHERE demo_data = FALSE ORDER BY item_id")
 	if err != nil {
 		return err
 	}
@@ -494,6 +518,7 @@ type account struct {
 	Subtype        string   `json:"subtype"`
 	CurrentBalance *float64 `json:"current_balance"`
 	Currency       *string  `json:"iso_currency_code"`
+	DemoData       bool     `json:"demo_data"`
 }
 
 type transaction struct {

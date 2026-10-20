@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>snappy-finance</Name>
+  <Repository>ghcr.io/shabarishk/snappy-finance:latest</Repository>
+  <Registry>https://ghcr.io/</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/shabarishk/snappy-finance/issues</Support>
+  <Project>https://github.com/shabarishk/snappy-finance</Project>
+  <Overview>Self-hosted personal finance dashboard. Configure the PostgreSQL connection and app secrets below. The database is external and is not included in this container.</Overview>
+  <Category>Finance:</Category>
+  <WebUI>http://[IP]:[PORT:8080]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/shabarishk/snappy-finance/main/unraid/snappy-finance.xml</TemplateURL>
+  <Icon/>
+  <ExtraParams>--restart unless-stopped</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="Web UI Port" Target="8080" Default="8080" Mode="tcp" Description="Web UI port published on the Unraid server." Type="Port" Display="always" Required="true" Mask="false">8080</Config>
+  <Config Name="PostgreSQL Host" Target="PGHOST" Default="" Description="PostgreSQL container DNS name on a shared Docker network, or the Unraid LAN IP when PostgreSQL publishes its port." Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="PostgreSQL Port" Target="PGPORT" Default="5432" Description="PostgreSQL server port." Type="Variable" Display="always" Required="true" Mask="false">5432</Config>
+  <Config Name="PostgreSQL Database" Target="PGDATABASE" Default="snappy_finance" Description="Existing PostgreSQL database name." Type="Variable" Display="always" Required="true" Mask="false">snappy_finance</Config>
+  <Config Name="PostgreSQL User" Target="PGUSER" Default="snappy_finance" Description="PostgreSQL role with access to the configured database." Type="Variable" Display="always" Required="true" Mask="false">snappy_finance</Config>
+  <Config Name="PostgreSQL Password" Target="PGPASSWORD" Default="" Description="Password for the PostgreSQL role." Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="PostgreSQL SSL mode" Target="PGSSLMODE" Default="disable" Description="Use require if your PostgreSQL server requires TLS." Type="Variable" Display="advanced" Required="false" Mask="false">disable</Config>
+  <Config Name="App Password" Target="APP_PASSWORD" Default="" Description="Password used to sign in to the finance dashboard (at least 12 characters)." Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="Session Secret" Target="SESSION_SECRET" Default="" Description="Random secret of at least 32 characters. Keep unchanged across upgrades." Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="Access Token Encryption Key" Target="APP_ENCRYPTION_KEY" Default="" Description="Base64-encoded random 32-byte key. Back it up and keep unchanged; losing it prevents decrypting stored Plaid tokens." Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="Plaid Environment" Target="PLAID_ENV" Default="sandbox" Description="Plaid environment: sandbox, development, or production." Type="Variable" Display="always" Required="false" Mask="false">sandbox</Config>
+  <Config Name="Plaid Client ID" Target="PLAID_CLIENT_ID" Default="" Description="Plaid client ID. Leave blank to disable bank linking." Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="Plaid Secret" Target="PLAID_SECRET" Default="" Description="Plaid secret for the selected environment." Type="Variable" Display="always" Required="false" Mask="true"/>
+  <Config Name="Sync Interval" Target="SYNC_INTERVAL" Default="6h" Description="How often to check linked Plaid Items for transaction updates." Type="Variable" Display="advanced" Required="false" Mask="false">6h</Config>
+  <Config Name="Seed demo data" Target="DEMO_DATA" Default="false" Description="Set true only for a test database to add fictional accounts and transactions." Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+</Container>

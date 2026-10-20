@@ -32,6 +32,7 @@ services:
       PLAID_CLIENT_ID: ${PLAID_CLIENT_ID:-}
       PLAID_SECRET: ${PLAID_SECRET:-}
       SYNC_INTERVAL: ${SYNC_INTERVAL:-6h}
+      DEMO_DATA: ${DEMO_DATA:-false}
     depends_on:
       db:
         condition: service_healthy

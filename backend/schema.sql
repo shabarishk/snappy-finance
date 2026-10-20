@@ -2,9 +2,12 @@ CREATE TABLE IF NOT EXISTS plaid_items (
     item_id TEXT PRIMARY KEY,
     access_token_encrypted BYTEA NOT NULL,
     cursor TEXT NOT NULL DEFAULT '',
+    demo_data BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_synced_at TIMESTAMPTZ
 );
+
+ALTER TABLE plaid_items ADD COLUMN IF NOT EXISTS demo_data BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE TABLE IF NOT EXISTS accounts (
     account_id TEXT PRIMARY KEY,

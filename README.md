@@ -14,10 +14,20 @@ A self-hosted personal finance app scaffold using Go, React, PostgreSQL, and Pla
 
 ## Run locally with Docker
 
+For a one-command Windows setup with fictional sample data and generated local credentials, run:
+
+```powershell
+.\scripts\start-demo.ps1
+```
+
+Open `http://localhost:8080` and use the sign-in password printed by the script. Press Ctrl+C to stop the app. The script creates `.env` only if one does not already exist, does not overwrite existing credentials, and uses a separate Compose project/database volume for its demo data.
+
+To configure manually:
+
 1. Copy `.env.example` to `.env`.
 2. Set unique values for `APP_PASSWORD`, `SESSION_SECRET` (at least 32 characters), `APP_ENCRYPTION_KEY`, and `POSTGRES_PASSWORD`.
    Generate the encryption key with `openssl rand -base64 32`.
-3. Add Plaid Sandbox credentials to `PLAID_CLIENT_ID` and `PLAID_SECRET` from the Plaid dashboard.
+3. To preview the app without Plaid, set `DEMO_DATA=true`. This seeds fictional accounts and transactions; Plaid credentials are not needed. To use Plaid instead, leave `DEMO_DATA=false` and add Sandbox credentials to `PLAID_CLIENT_ID` and `PLAID_SECRET`.
 4. Start the app:
 
    ```sh
@@ -27,6 +37,8 @@ A self-hosted personal finance app scaffold using Go, React, PostgreSQL, and Pla
 5. Open `http://localhost:8080` and sign in with `APP_PASSWORD`.
 
 The API is bound to loopback on port 8081 by default; the web container proxies `/api` to it. For Unraid, set `WEB_PORT` to the host port you want to publish. Keep the app private behind a VPN or a TLS-terminating reverse proxy; do not expose it directly to the internet over plain HTTP.
+
+Demo rows are clearly labeled in the dashboard and excluded from Plaid sync. They are written once and remain in the PostgreSQL volume even after you turn `DEMO_DATA` off, so use a separate local database/Compose project for demo testing rather than enabling it on a database with real data.
 
 ## Run frontend and backend separately
 
@@ -46,6 +58,30 @@ npm run dev
 ```
 
 Vite serves the UI on port 5173 and proxies API requests to `localhost:8081`. Set `API_PORT=127.0.0.1:8081` when running the API locally.
+
+## Publish and deploy on Unraid
+
+The GitHub Actions workflow publishes a single app image to `ghcr.io/shabarishk/snappy-finance:latest` whenever changes are pushed to `main` (and version tags). The image contains the Go API and built React frontend; it does not contain PostgreSQL.
+
+After the first successful workflow run, open the package under your GitHub profile's **Packages** page and set its visibility to **Public** if GitHub created it as private. The Unraid template pulls the public `latest` image.
+
+### Add the Unraid launch template
+
+On the Unraid server, download the template into the user templates folder:
+
+```bash
+mkdir -p /boot/config/plugins/dockerMan/templates-user
+curl -fsSL https://raw.githubusercontent.com/shabarishk/snappy-finance/main/unraid/snappy-finance.xml \
+  -o /boot/config/plugins/dockerMan/templates-user/my-snappy-finance.xml
+```
+
+Then open **Docker → Add Container** and select the `snappy-finance` user template. The launch form includes the PostgreSQL host, port, database, username, password, app password, session secret, encryption key, and optional Plaid settings. Unraid saves these settings in the user template and reuses them when the container is restarted or upgraded.
+
+Create the database and a PostgreSQL role for the app in your existing PostgreSQL container first. For a normal Unraid `bridge` network setup, set `PGHOST` to the Unraid server's LAN IP and `PGPORT` to the port that the PostgreSQL container publishes on the Unraid host. Do **not** use `localhost` or `127.0.0.1`; those addresses refer to the Snappy Finance container itself. If both containers share a user-defined Docker network, you can instead use the PostgreSQL container name and internal port.
+
+The app stores all financial rows in that PostgreSQL database and does not need its own data volume. Keep `APP_ENCRYPTION_KEY` stable and back it up securely; changing it makes existing Plaid access tokens unreadable. `PGPASSWORD`, `APP_PASSWORD`, `SESSION_SECRET`, `APP_ENCRYPTION_KEY`, and `PLAID_SECRET` are masked fields in the template.
+
+For demo-only testing, set **Seed demo data** to `true` on a disposable database. Leave it `false` when connecting real financial data. The current app only makes outbound Plaid requests and uses periodic sync; it does not require an inbound webhook port.
 
 ## Important deployment notes
 
