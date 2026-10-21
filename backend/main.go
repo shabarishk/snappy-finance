@@ -631,11 +631,11 @@ func (a *app) persistTransactionPage(ctx context.Context, itemID string, result 
 				category_match_key, category_id
 			) VALUES (
 				$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
-				transaction_category_match_key($5, $4, $3, ($6 < 0)),
+				transaction_category_match_key($5, $4, $3, ($6::numeric < 0::numeric)),
 				(SELECT category_id
 				 FROM transaction_category_rules
-				 WHERE match_key = transaction_category_match_key($5, $4, $3, ($6 < 0))
-				   AND category_type = CASE WHEN $6 < 0 THEN 'income' ELSE 'expense' END)
+				 WHERE match_key = transaction_category_match_key($5, $4, $3, ($6::numeric < 0::numeric))
+				   AND category_type = CASE WHEN $6::numeric < 0::numeric THEN 'income' ELSE 'expense' END)
 			)
 			ON CONFLICT (transaction_id) DO UPDATE SET
 				account_id=EXCLUDED.account_id, name=EXCLUDED.name, merchant_name=EXCLUDED.merchant_name,
