@@ -10,7 +10,9 @@ A self-hosted personal finance app scaffold using Go, React, PostgreSQL, and Pla
 - Administrators can categorize expense transactions separately from income and transfer transactions, and exclude categories from monthly spending or income totals.
 - The dashboard's first summary card defaults to expendable income, based on transactions assigned the Expendable income category, and can be toggled to total income.
 - Dashboard income, spending, and net statistics default to the spend calendar from the 4th through the 3rd; switch to calendar month from Dashboard preferences.
+- The Overview heading opens a calendar-month selector; its history begins one year before first use in the browser and grows as new months arrive.
 - The dashboard's cash balance card totals depository accounts only.
+- Dashboard filters and summary-card preferences open in a slide-in drawer from the right.
 - Assigning a category creates a reusable rule that updates similar existing transactions and applies to future syncs. Expense rules match the normalized first three merchant/description words; income rules match the normalized first three transaction-name words on the same account.
 - The Administration page separates user management and financial management into tabs.
 - Plaid Link token creation and public-token exchange.

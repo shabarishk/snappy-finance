@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, Banknote, Eye, EyeOff, Landmark, LockKeyhole, LogOut, Menu, RefreshCw, UsersRound, Wallet, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, Banknote, ChevronDown, Eye, EyeOff, Filter, Landmark, LockKeyhole, LogOut, Menu, RefreshCw, UsersRound, Wallet, X } from "lucide-react";
 
 type Profile = {
   id: string;
@@ -95,18 +95,27 @@ function transactionDateKey(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
-function getStatisticsRange(period: "spend" | "calendar", today = new Date()) {
-  let start: Date;
-  let end: Date;
-  if (period === "calendar") {
-    start = new Date(today.getFullYear(), today.getMonth(), 1);
-    end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-  } else {
-    start = today.getDate() >= 4
-      ? new Date(today.getFullYear(), today.getMonth(), 4)
-      : new Date(today.getFullYear(), today.getMonth() - 1, 4);
-    end = new Date(start.getFullYear(), start.getMonth() + 1, 3);
-  }
+function monthKey(date: Date) {
+  return transactionDateKey(date).slice(0, 7);
+}
+
+function getCurrentSpendMonth(today = new Date()) {
+  const month = today.getDate() >= 4
+    ? new Date(today.getFullYear(), today.getMonth(), 1)
+    : new Date(today.getFullYear(), today.getMonth() - 1, 1);
+  return monthKey(month);
+}
+
+function getInitialMonthHistoryStart(today = new Date()) {
+  return monthKey(new Date(today.getFullYear(), today.getMonth() - 12, 1));
+}
+
+function getStatisticsRange(period: "spend" | "calendar", selectedMonth: string) {
+  const [year, month] = selectedMonth.split("-").map(Number);
+  const start = new Date(year, month - 1, period === "spend" ? 4 : 1);
+  const end = period === "calendar"
+    ? new Date(year, month, 0)
+    : new Date(year, month, 3);
   const formatDate = (date: Date) => date.toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
@@ -130,10 +139,14 @@ export default function App() {
   const [adminSection, setAdminSection] = useState<"users" | "finance">("users");
   const [incomeDisplay, setIncomeDisplay] = useState<"expendable" | "total">("expendable");
   const [statisticsPeriod, setStatisticsPeriod] = useState<"spend" | "calendar">("spend");
+  const [selectedOverviewMonth, setSelectedOverviewMonth] = useState(() => getCurrentSpendMonth());
+  const [monthHistoryStart, setMonthHistoryStart] = useState(() => getInitialMonthHistoryStart());
+  const [monthPickerOpen, setMonthPickerOpen] = useState(false);
   const [transactionTab, setTransactionTab] = useState<TransactionTabID>("depository");
   const [transactionPage, setTransactionPage] = useState(1);
   const [transactionPageSize, setTransactionPageSize] = useState(25);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [dashboardPreferencesOpen, setDashboardPreferencesOpen] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [hiddenCards, setHiddenCards] = useState<string[]>([]);
@@ -149,6 +162,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const monthPickerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const syncPageFromHash = () => {
@@ -161,9 +175,51 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!sidebarOpen) return;
+    if (activePage !== "overview") setDashboardPreferencesOpen(false);
+  }, [activePage]);
+
+  useEffect(() => {
+    const storageKey = "snappy-finance-overview-month-history-start";
+    const validMonth = /^\d{4}-(0[1-9]|1[0-2])$/;
+    try {
+      const storedMonth = window.localStorage.getItem(storageKey);
+      if (storedMonth && validMonth.test(storedMonth)) {
+        if (storedMonth < monthHistoryStart) setMonthHistoryStart(storedMonth);
+        else if (storedMonth > monthHistoryStart) window.localStorage.setItem(storageKey, monthHistoryStart);
+      } else {
+        window.localStorage.setItem(storageKey, monthHistoryStart);
+      }
+    } catch (err) {
+      console.error("Could not persist Overview month picker history.", err);
+      setError("Could not save the Overview month picker history on this device.");
+    }
+  }, [monthHistoryStart]);
+
+  useEffect(() => {
+    if (!monthPickerOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSidebarOpen(false);
+      if (event.key === "Escape") setMonthPickerOpen(false);
+    };
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (event.target instanceof Node && !monthPickerRef.current?.contains(event.target)) {
+        setMonthPickerOpen(false);
+      }
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    return () => {
+      window.removeEventListener("keydown", closeOnEscape);
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+    };
+  }, [monthPickerOpen]);
+
+  useEffect(() => {
+    if (!sidebarOpen && !dashboardPreferencesOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSidebarOpen(false);
+        setDashboardPreferencesOpen(false);
+      }
     };
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -172,11 +228,13 @@ export default function App() {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [sidebarOpen]);
+  }, [dashboardPreferencesOpen, sidebarOpen]);
 
   function navigateToPage(page: "overview" | "administration" | "transactions") {
     setActivePage(page);
     setSidebarOpen(false);
+    setDashboardPreferencesOpen(false);
+    setMonthPickerOpen(false);
     if (window.location.hash !== `#${page}`) window.location.hash = page;
   }
 
@@ -220,9 +278,34 @@ export default function App() {
   }, [refresh]);
 
   const statisticsRange = useMemo(
-    () => getStatisticsRange(statisticsPeriod),
-    [statisticsPeriod],
+    () => getStatisticsRange(statisticsPeriod, selectedOverviewMonth),
+    [selectedOverviewMonth, statisticsPeriod],
   );
+  const latestOverviewMonth = monthKey(new Date());
+  const overviewMonthOptions = useMemo(() => {
+    const startMonth = monthHistoryStart > latestOverviewMonth ? latestOverviewMonth : monthHistoryStart;
+    const [startYear, startMonthNumber] = startMonth.split("-").map(Number);
+    const [endYear, endMonthNumber] = latestOverviewMonth.split("-").map(Number);
+    const months: string[] = [];
+    let year = startYear;
+    let month = startMonthNumber;
+    while (year < endYear || (year === endYear && month <= endMonthNumber)) {
+      months.push(`${year}-${String(month).padStart(2, "0")}`);
+      if (month === 12) {
+        year += 1;
+        month = 1;
+      } else {
+        month += 1;
+      }
+    }
+    return months.reverse();
+  }, [latestOverviewMonth, monthHistoryStart]);
+  const displayedMonth = new Date(
+    Number(selectedOverviewMonth.slice(0, 4)),
+    Number(selectedOverviewMonth.slice(5, 7)) - 1,
+    1,
+  );
+  const displayedMonthName = displayedMonth.toLocaleDateString(undefined, { month: "long" });
 
   const totals = useMemo(() => {
     const categoriesByID = new Map(transactionCategories.map((category) => [category.category_id, category]));
@@ -298,7 +381,10 @@ export default function App() {
     ? "Administration"
     : activePage === "transactions" ? "Transactions" : "Overview";
   const pageEyebrow = activePage === "administration" ? "ADMINISTRATION" : "YOUR FINANCES";
-  const currentPeriodLabel = statisticsPeriod === "spend" ? "THIS CYCLE" : "THIS MONTH";
+  const currentSpendMonth = getCurrentSpendMonth();
+  const currentPeriodLabel = statisticsPeriod === "spend"
+    ? selectedOverviewMonth === currentSpendMonth ? "THIS CYCLE" : "SPEND CYCLE"
+    : selectedOverviewMonth === latestOverviewMonth ? "THIS MONTH" : "SELECTED MONTH";
 
   async function signIn(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -721,8 +807,64 @@ export default function App() {
 
       <section className="main-content">
         <header className="topbar">
-          <div><p className="eyebrow">{pageEyebrow}</p><h1>{pageTitle}</h1></div>
+          <div>
+            <p className="eyebrow">{pageEyebrow}</p>
+            {activePage === "overview" ? (
+              <div className="overview-month-picker" ref={monthPickerRef}>
+                <h1 className="overview-month-title">
+                  <button
+                    type="button"
+                    className="overview-month-button"
+                    aria-label={`${displayedMonthName} ${displayedMonth.getFullYear()} finances. Choose month.`}
+                    aria-expanded={monthPickerOpen}
+                    aria-haspopup="dialog"
+                    aria-controls="overview-month-picker"
+                    onClick={() => setMonthPickerOpen((open) => !open)}
+                  >
+                    <span>{displayedMonthName}'s finances</span>
+                    <span className="overview-month-year">{displayedMonth.getFullYear()}</span>
+                    <ChevronDown size={18} />
+                  </button>
+                </h1>
+                {monthPickerOpen && (
+                  <div id="overview-month-picker" className="month-picker-popover" role="dialog" aria-label="Choose a calendar month">
+                    <label className="month-picker-control">
+                      View month
+                      <select
+                        value={selectedOverviewMonth}
+                        onChange={(event) => {
+                          setSelectedOverviewMonth(event.target.value);
+                          setStatisticsPeriod("calendar");
+                          setMonthPickerOpen(false);
+                        }}
+                      >
+                        {overviewMonthOptions.map((monthKey) => {
+                          const [year, month] = monthKey.split("-").map(Number);
+                          const label = new Date(year, month - 1, 1).toLocaleDateString(undefined, {
+                            month: "long",
+                            year: "numeric",
+                          });
+                          return <option key={monthKey} value={monthKey}>{label}</option>;
+                        })}
+                      </select>
+                    </label>
+                  </div>
+                )}
+              </div>
+            ) : <h1>{pageTitle}</h1>}
+          </div>
           <div className="topbar-actions">
+            {activePage === "overview" && (
+              <button
+                type="button"
+                className="secondary-button filter-button"
+                aria-expanded={dashboardPreferencesOpen}
+                aria-controls="dashboard-preferences"
+                onClick={() => setDashboardPreferencesOpen(true)}
+              >
+                <Filter size={16} /> Filter
+              </button>
+            )}
             {activePage === "overview" && profile?.role === "admin" && <>
               <button className="secondary-button" onClick={() => void syncNow()} disabled={busy || !accounts.some((account) => !account.demo_data)}>
                 <RefreshCw size={16} className={busy ? "spin" : ""} /> Sync
@@ -814,41 +956,64 @@ export default function App() {
             {accounts.some((account) => account.demo_data) && (
               <div className="alert demo-banner">Demo data — these fictional accounts and transactions are for local testing only.</div>
             )}
-            <section className="panel settings-panel">
-              <div className="panel-heading"><div><h2>Dashboard preferences</h2><p>Choose which summary cards appear on your dashboard.</p></div></div>
-              <div className="preference-list">
-                {dashboardCards.map((card) => (
-                  <label className="preference-option" key={card.id}>
-                    <input
-                      type="checkbox"
-                      checked={!hiddenCards.includes(card.id)}
-                      onChange={(event) => void savePreferences(card.id, event.target.checked)}
-                    />
-                    {card.label}
-                  </label>
-                ))}
-              </div>
-              <div className="statistics-period-control">
-                <div className="statistics-period-copy">
-                  <strong>Statistics period</strong>
-                  <span>{statisticsPeriod === "spend" ? "Spend calendar (4th–3rd)" : "Calendar month"} · {statisticsRange.label}</span>
-                </div>
-                <div className="statistics-period-options" role="group" aria-label="Statistics period">
+            <button
+              type="button"
+              className={`dashboard-preferences-backdrop ${dashboardPreferencesOpen ? "visible" : ""}`}
+              aria-label="Close dashboard filters"
+              aria-hidden={!dashboardPreferencesOpen}
+              tabIndex={dashboardPreferencesOpen ? 0 : -1}
+              onClick={() => setDashboardPreferencesOpen(false)}
+            />
+            <aside
+              id="dashboard-preferences"
+              className={`dashboard-preferences-drawer ${dashboardPreferencesOpen ? "open" : ""}`}
+              aria-labelledby="dashboard-preferences-title"
+              aria-hidden={!dashboardPreferencesOpen}
+            >
+              <section className="panel settings-panel">
+                <div className="panel-heading preferences-drawer-heading">
+                  <div><h2 id="dashboard-preferences-title">Dashboard preferences</h2><p>Choose which summary cards and statistics period appear.</p></div>
                   <button
                     type="button"
-                    className={`statistics-period-option ${statisticsPeriod === "spend" ? "active" : ""}`}
-                    aria-pressed={statisticsPeriod === "spend"}
-                    onClick={() => setStatisticsPeriod("spend")}
-                  >Spend calendar</button>
-                  <button
-                    type="button"
-                    className={`statistics-period-option ${statisticsPeriod === "calendar" ? "active" : ""}`}
-                    aria-pressed={statisticsPeriod === "calendar"}
-                    onClick={() => setStatisticsPeriod("calendar")}
-                  >Calendar month</button>
+                    className="preferences-drawer-close"
+                    aria-label="Close dashboard filters"
+                    onClick={() => setDashboardPreferencesOpen(false)}
+                  ><X size={18} /></button>
                 </div>
-              </div>
-            </section>
+                <div className="preference-list">
+                  {dashboardCards.map((card) => (
+                    <label className="preference-option" key={card.id}>
+                      <input
+                        type="checkbox"
+                        checked={!hiddenCards.includes(card.id)}
+                        onChange={(event) => void savePreferences(card.id, event.target.checked)}
+                      />
+                      {card.label}
+                    </label>
+                  ))}
+                </div>
+                <div className="statistics-period-control">
+                  <div className="statistics-period-copy">
+                    <strong>Statistics period</strong>
+                    <span>{statisticsPeriod === "spend" ? "Spend calendar (4th–3rd)" : "Calendar month"} · {statisticsRange.label}</span>
+                  </div>
+                  <div className="statistics-period-options" role="group" aria-label="Statistics period">
+                    <button
+                      type="button"
+                      className={`statistics-period-option ${statisticsPeriod === "spend" ? "active" : ""}`}
+                      aria-pressed={statisticsPeriod === "spend"}
+                      onClick={() => setStatisticsPeriod("spend")}
+                    >Spend calendar</button>
+                    <button
+                      type="button"
+                      className={`statistics-period-option ${statisticsPeriod === "calendar" ? "active" : ""}`}
+                      aria-pressed={statisticsPeriod === "calendar"}
+                      onClick={() => setStatisticsPeriod("calendar")}
+                    >Calendar month</button>
+                  </div>
+                </div>
+              </section>
+            </aside>
 
         <div className="summary-grid">
           {!hiddenCards.includes("income") && <article className="summary-card income-card">
