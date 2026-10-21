@@ -9,13 +9,14 @@ A self-hosted personal finance app scaffold using Go, React, PostgreSQL, and Pla
 - Administrators can hide selected transactions from household users while retaining access to them.
 - Administrators can categorize expense transactions separately from income and transfer transactions, and exclude categories from monthly spending or income totals.
 - The dashboard's first summary card defaults to expendable income, based on transactions assigned the Expendable income category, and can be toggled to total income.
+- Dashboard income, spending, and net statistics default to the spend calendar from the 4th through the 3rd; switch to calendar month from Dashboard preferences.
 - Assigning a category creates a reusable rule that updates similar existing transactions and applies to future syncs, matching the normalized first three words of the merchant name or transaction description within the same income/expense direction.
 - The Administration page separates user management and financial management into tabs.
 - Plaid Link token creation and public-token exchange.
 - AES-GCM encryption of stored Plaid access tokens.
 - Cursor-based Plaid Transactions Sync with added, modified, and removed transaction handling.
 - Periodic sync worker and a manual sync action.
-- React dashboard for linked accounts and a separate transactions page.
+- React dashboard for linked accounts and a separate Transactions page with tabs for cash, credit, and loan account transactions.
 - Docker Compose deployment with PostgreSQL data persisted in a named volume.
 
 ## Run locally with Docker

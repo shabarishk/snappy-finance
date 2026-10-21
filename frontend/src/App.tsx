@@ -47,6 +47,8 @@ type Transaction = {
   category_id: string | null;
 };
 
+type TransactionTabID = "depository" | "credit" | "loan" | "other";
+
 type TransactionCategory = {
   category_id: string;
   label: string;
@@ -86,6 +88,37 @@ function money(value: number | null, currency: string | null = "USD") {
   }).format(value);
 }
 
+function transactionDateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getStatisticsRange(period: "spend" | "calendar", today = new Date()) {
+  let start: Date;
+  let end: Date;
+  if (period === "calendar") {
+    start = new Date(today.getFullYear(), today.getMonth(), 1);
+    end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+  } else {
+    start = today.getDate() >= 4
+      ? new Date(today.getFullYear(), today.getMonth(), 4)
+      : new Date(today.getFullYear(), today.getMonth() - 1, 4);
+    end = new Date(start.getFullYear(), start.getMonth() + 1, 3);
+  }
+  const formatDate = (date: Date) => date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+  return {
+    start: transactionDateKey(start),
+    end: transactionDateKey(end),
+    label: `${formatDate(start)} – ${formatDate(end)}`,
+  };
+}
+
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -96,6 +129,8 @@ export default function App() {
   });
   const [adminSection, setAdminSection] = useState<"users" | "finance">("users");
   const [incomeDisplay, setIncomeDisplay] = useState<"expendable" | "total">("expendable");
+  const [statisticsPeriod, setStatisticsPeriod] = useState<"spend" | "calendar">("spend");
+  const [transactionTab, setTransactionTab] = useState<TransactionTabID>("depository");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -182,13 +217,16 @@ export default function App() {
       });
   }, [refresh]);
 
+  const statisticsRange = useMemo(
+    () => getStatisticsRange(statisticsPeriod),
+    [statisticsPeriod],
+  );
+
   const totals = useMemo(() => {
-    const today = new Date();
-    const month = today.toISOString().slice(0, 7);
     const categoriesByID = new Map(transactionCategories.map((category) => [category.category_id, category]));
     const current = transactions.filter(
       (item) => {
-        if (!item.date.startsWith(month)) return false;
+        if (item.date < statisticsRange.start || item.date > statisticsRange.end) return false;
         const category = item.category_id ? categoriesByID.get(item.category_id) : undefined;
         const transactionType = item.amount < 0 ? "income" : "expense";
         return !(category?.category_type === transactionType && category.excluded_from_totals);
@@ -200,7 +238,7 @@ export default function App() {
       .filter((item) => item.amount < 0 && item.category_id === "expendable_income")
       .reduce((sum, item) => sum + Math.abs(item.amount), 0);
     return { spent, income, expendableIncome, net: income - spent };
-  }, [transactions, transactionCategories]);
+  }, [transactions, transactionCategories, statisticsRange]);
 
   const accountGroups = useMemo(() => {
     const groups = accountCategories.map(({ type, label }) => ({
@@ -214,10 +252,36 @@ export default function App() {
     return groups;
   }, [accounts]);
 
+  const transactionTabs = useMemo(() => {
+    const accountTypes = new Map(accounts.map((account) => [account.account_id, account.type.toLowerCase()]));
+    const knownTypes = new Set(["depository", "credit", "loan"]);
+    const hasOtherTransactions = transactions.some((item) => !knownTypes.has(accountTypes.get(item.account_id) ?? ""));
+    const hasOtherAccounts = accounts.some((account) => !knownTypes.has(account.type.toLowerCase()));
+    return [
+      { id: "depository" as const, label: "Cash accounts" },
+      { id: "credit" as const, label: "Credit accounts" },
+      { id: "loan" as const, label: "Loan accounts" },
+      ...(hasOtherTransactions || hasOtherAccounts ? [{ id: "other" as const, label: "Other accounts" }] : []),
+    ];
+  }, [accounts, transactions]);
+  const activeTransactionTab = transactionTabs.some((tab) => tab.id === transactionTab)
+    ? transactionTab
+    : "depository";
+  const visibleTransactions = useMemo(() => {
+    const accountTypes = new Map(accounts.map((account) => [account.account_id, account.type.toLowerCase()]));
+    return transactions.filter((item) => {
+      const type = accountTypes.get(item.account_id) ?? "";
+      return activeTransactionTab === "other"
+        ? !["depository", "credit", "loan"].includes(type)
+        : type === activeTransactionTab;
+    });
+  }, [accounts, activeTransactionTab, transactions]);
+
   const pageTitle = activePage === "administration"
     ? "Administration"
     : activePage === "transactions" ? "Transactions" : "Overview";
   const pageEyebrow = activePage === "administration" ? "ADMINISTRATION" : "YOUR FINANCES";
+  const currentPeriodLabel = statisticsPeriod === "spend" ? "THIS CYCLE" : "THIS MONTH";
 
   async function signIn(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -339,11 +403,26 @@ export default function App() {
   const transactionsPanel = (
     <section className="panel" id="transactions">
       <div className="panel-heading"><div><h2>Recent transactions</h2><p>{profile?.role === "admin" ? "Categories apply to similar past and future transactions; manage exclusions in Administration." : "Your latest activity across accounts"}</p></div></div>
-      {loading ? <div className="empty-state">Loading transactions…</div> : transactions.length === 0 ? (
-        <div className="empty-state compact">Transactions will appear here after your first account sync.</div>
+      <div className="transaction-tabs" role="group" aria-label="Filter transactions by account type">
+        {transactionTabs.map((tab) => (
+          <button
+            type="button"
+            key={tab.id}
+            className={`transaction-tab ${activeTransactionTab === tab.id ? "active" : ""}`}
+            aria-pressed={activeTransactionTab === tab.id}
+            onClick={() => setTransactionTab(tab.id)}
+          >{tab.label}</button>
+        ))}
+      </div>
+      {loading ? <div className="empty-state">Loading transactions…</div> : visibleTransactions.length === 0 ? (
+        <div className="empty-state compact">
+          {transactions.length === 0
+            ? "Transactions will appear here after your first account sync."
+            : `No transactions for ${transactionTabs.find((tab) => tab.id === activeTransactionTab)?.label.toLowerCase() ?? "this account type"} yet.`}
+        </div>
       ) : (
         <div className="transaction-list">
-          {transactions.map((item) => (
+          {visibleTransactions.map((item) => (
             <div className={`transaction-row ${item.hidden_from_users ? "hidden-transaction" : ""}`} key={item.transaction_id}>
               <span className={`transaction-icon ${item.amount < 0 ? "income-icon" : ""}`}>{item.amount < 0 ? <ArrowDownLeft size={17} /> : <ArrowUpRight size={17} />}</span>
               <div className="transaction-info"><strong>{item.merchant_name || item.name}</strong><span>{transactionCategories.find((category) => category.category_id === item.category_id)?.label || item.category_detailed || item.category_primary || "Uncategorized"} · {new Date(`${item.date}T12:00:00`).toLocaleDateString()}</span></div>
@@ -691,12 +770,32 @@ export default function App() {
                   </label>
                 ))}
               </div>
+              <div className="statistics-period-control">
+                <div className="statistics-period-copy">
+                  <strong>Statistics period</strong>
+                  <span>{statisticsPeriod === "spend" ? "Spend calendar (4th–3rd)" : "Calendar month"} · {statisticsRange.label}</span>
+                </div>
+                <div className="statistics-period-options" role="group" aria-label="Statistics period">
+                  <button
+                    type="button"
+                    className={`statistics-period-option ${statisticsPeriod === "spend" ? "active" : ""}`}
+                    aria-pressed={statisticsPeriod === "spend"}
+                    onClick={() => setStatisticsPeriod("spend")}
+                  >Spend calendar</button>
+                  <button
+                    type="button"
+                    className={`statistics-period-option ${statisticsPeriod === "calendar" ? "active" : ""}`}
+                    aria-pressed={statisticsPeriod === "calendar"}
+                    onClick={() => setStatisticsPeriod("calendar")}
+                  >Calendar month</button>
+                </div>
+              </div>
             </section>
 
         <div className="summary-grid">
           {!hiddenCards.includes("income") && <article className="summary-card income-card">
             <div className="income-summary-heading">
-              <div className="summary-label">{incomeDisplay === "expendable" ? "TOTAL EXPENDABLE INCOME" : "TOTAL INCOME THIS MONTH"}</div>
+              <div className="summary-label">{incomeDisplay === "expendable" ? "TOTAL EXPENDABLE INCOME" : `TOTAL INCOME ${currentPeriodLabel}`}</div>
               <button
                 type="button"
                 className="summary-toggle"
@@ -714,14 +813,14 @@ export default function App() {
             <div className="summary-foot"><Wallet size={15} /> Across {accounts.length} connected account{accounts.length === 1 ? "" : "s"}</div>
           </article>}
           {!hiddenCards.includes("spending") && <article className="summary-card">
-            <div className="summary-label">SPENDING THIS MONTH</div>
+            <div className="summary-label">SPENDING {currentPeriodLabel}</div>
             <div className="summary-value">{money(totals.spent)}</div>
             <div className="summary-foot"><ArrowUpRight size={15} /> Outflows</div>
           </article>}
           {!hiddenCards.includes("net") && <article className="summary-card">
-            <div className="summary-label">MONTHLY NET</div>
+            <div className="summary-label">NET {currentPeriodLabel}</div>
             <div className={`summary-value ${totals.net >= 0 ? "positive-text" : "negative-text"}`}>{money(totals.net)}</div>
-            <div className="summary-foot">Income minus spending</div>
+            <div className="summary-foot">Income minus spending in selected period</div>
           </article>}
         </div>
 
