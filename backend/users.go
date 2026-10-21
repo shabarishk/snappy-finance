@@ -16,6 +16,7 @@ import (
 
 type dashboardPreferences struct {
 	HiddenCards []string `json:"hidden_cards"`
+	CardOrder   []string `json:"card_order"`
 }
 
 type userSummary struct {
@@ -26,10 +27,25 @@ type userSummary struct {
 }
 
 var dashboardCardIDs = map[string]struct{}{
-	"balance":  {},
-	"income":   {},
-	"spending": {},
-	"net":      {},
+	"income":             {},
+	"balance":            {},
+	"spending":           {},
+	"net":                {},
+	"expendable_balance": {},
+	"credit_balance":     {},
+	"statement_balance":  {},
+	"projected_income":   {},
+}
+
+var defaultDashboardCardOrder = []string{
+	"income",
+	"balance",
+	"spending",
+	"net",
+	"expendable_balance",
+	"credit_balance",
+	"statement_balance",
+	"projected_income",
 }
 
 func normalizeUsername(username string) (string, error) {
@@ -179,6 +195,12 @@ func (a *app) getPreferences(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load dashboard preferences")
 		return
 	}
+	if preferences.HiddenCards == nil {
+		preferences.HiddenCards = []string{}
+	}
+	if len(preferences.CardOrder) == 0 {
+		preferences.CardOrder = append([]string(nil), defaultDashboardCardOrder...)
+	}
 	writeJSON(w, http.StatusOK, preferences)
 }
 
@@ -201,6 +223,33 @@ func (a *app) updatePreferences(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	preferences.HiddenCards = hidden
+	if len(preferences.CardOrder) == 0 {
+		preferences.CardOrder = append([]string(nil), defaultDashboardCardOrder...)
+	} else {
+		if len(preferences.CardOrder) != len(dashboardCardIDs) {
+			writeError(w, http.StatusBadRequest, "dashboard card order must include every card")
+			return
+		}
+		order := make([]string, 0, len(preferences.CardOrder))
+		orderSeen := make(map[string]struct{}, len(preferences.CardOrder))
+		for _, card := range preferences.CardOrder {
+			if _, ok := dashboardCardIDs[card]; !ok {
+				writeError(w, http.StatusBadRequest, "unknown dashboard card")
+				return
+			}
+			if _, ok := orderSeen[card]; ok {
+				writeError(w, http.StatusBadRequest, "dashboard card order contains duplicates")
+				return
+			}
+			orderSeen[card] = struct{}{}
+			order = append(order, card)
+		}
+		if len(orderSeen) != len(dashboardCardIDs) {
+			writeError(w, http.StatusBadRequest, "dashboard card order must include every card")
+			return
+		}
+		preferences.CardOrder = order
+	}
 	encoded, err := json.Marshal(preferences)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not save dashboard preferences")

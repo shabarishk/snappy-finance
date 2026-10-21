@@ -102,6 +102,14 @@ button { cursor: pointer; }
 .preference-list { display: flex; flex-wrap: wrap; gap: 10px 22px; padding: 17px 21px; }
 .preference-option { align-items: center; color: #52615a; display: flex; font-size: 11px; gap: 8px; }
 .preference-option input { accent-color: var(--green); }
+.preference-list-heading { color: #52615a; font-size: 11px; }
+.dashboard-preferences-drawer .preference-list { align-items: flex-start; flex-direction: column; gap: 7px; }
+.card-order-list { border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 7px; padding: 15px 21px; }
+.card-order-row { align-items: center; color: #52615a; display: flex; font-size: 11px; justify-content: space-between; min-height: 34px; }
+.card-order-row > div { display: flex; gap: 5px; }
+.card-order-row button { align-items: center; background: white; border: 1px solid #dfe6e1; border-radius: 6px; color: #52615a; display: inline-flex; height: 30px; justify-content: center; padding: 0; width: 32px; }
+.card-order-row button:disabled { cursor: not-allowed; opacity: .45; }
+.move-card-up { transform: rotate(180deg); }
 .statistics-period-control { align-items: center; border-top: 1px solid var(--line); display: flex; gap: 18px; justify-content: space-between; padding: 15px 21px; }
 .statistics-period-copy { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .statistics-period-copy strong { color: #52615a; font-size: 11px; }
@@ -114,8 +122,17 @@ button { cursor: pointer; }
 .profile-row span { color: var(--muted); font-size: 10px; }
 .profile-form { align-items: end; display: flex; flex-wrap: wrap; gap: 12px; padding: 16px 21px 20px; }
 .profile-form label { color: #52615a; display: flex; flex: 1 1 190px; flex-direction: column; font-size: 10px; font-weight: 600; gap: 6px; }
-.profile-form input { border: 1px solid #dce4de; border-radius: 7px; font-size: 12px; height: 38px; outline: none; padding: 0 10px; }
-.profile-form input:focus { border-color: #78b89b; box-shadow: 0 0 0 3px #19856815; }
+.profile-form input, .profile-form select { background: white; border: 1px solid #dce4de; border-radius: 7px; color: #52615a; font-size: 12px; height: 38px; outline: none; padding: 0 10px; }
+.profile-form input:focus, .profile-form select:focus { border-color: #78b89b; box-shadow: 0 0 0 3px #19856815; }
+.finance-form { border-bottom: 1px solid var(--line); }
+.finance-help { color: var(--muted); font-size: 10px; line-height: 1.5; margin: 0; padding: 0 21px 16px; }
+.manual-statement-list { padding: 15px 21px; }
+.manual-statement-list h3 { color: #52615a; font-size: 11px; margin: 0 0 8px; }
+.manual-statement-row { align-items: center; border-top: 1px solid var(--line); display: flex; gap: 12px; min-height: 54px; }
+.manual-statement-row > div { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; }
+.manual-statement-row > div strong, .manual-statement-row > strong { color: #52615a; font-size: 11px; }
+.manual-statement-row span { color: var(--muted); font-size: 10px; }
+.manual-statement-row .secondary-button { min-height: 32px; padding: 0 10px; }
 .password-panel { margin-bottom: 18px; padding: 15px 0 0; }
 .password-panel summary { color: #52615a; cursor: pointer; font-size: 12px; font-weight: 600; padding: 0 21px 15px; }
 .password-panel .profile-form { border-top: 1px solid var(--line); }
@@ -224,6 +241,7 @@ footer { color: #9aa39e; font-size: 10px; padding: 6px 0 16px; }
   .profile-form { align-items: stretch; flex-direction: column; }
   .profile-form label { flex-basis: auto; }
   .profile-form .primary-button, .profile-form .secondary-button { width: 100%; }
+  .manual-statement-row { flex-wrap: wrap; padding: 8px 0; }
   .profile-row { gap: 10px; }
   .profile-row strong { overflow-wrap: anywhere; }
 }

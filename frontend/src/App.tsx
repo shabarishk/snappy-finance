@@ -12,7 +12,44 @@ const dashboardCards = [
   { id: "balance", label: "Total cash account balance" },
   { id: "spending", label: "Spending this month" },
   { id: "net", label: "Monthly net" },
+  { id: "expendable_balance", label: "Current expendable balance" },
+  { id: "credit_balance", label: "Current total credit balance" },
+  { id: "statement_balance", label: "Total statement balance" },
+  { id: "projected_income", label: "Projected expendable income" },
 ];
+const defaultDashboardCardOrder = dashboardCards.map((card) => card.id);
+
+function normalizeDashboardCardOrder(order: string[] | undefined) {
+  const known = new Set(defaultDashboardCardOrder);
+  const normalized = (order ?? []).filter((card, index, cards) => known.has(card) && cards.indexOf(card) === index);
+  return [...normalized, ...defaultDashboardCardOrder.filter((card) => !normalized.includes(card))];
+}
+
+type DashboardPreferences = {
+  hidden_cards: string[];
+  card_order: string[];
+};
+
+type DashboardMetrics = {
+  current_expendable_balance: number | null;
+  current_total_credit_balance: number;
+  statement_balance_due: number | null;
+  projected_expendable_income: number | null;
+};
+
+type ManualCreditStatement = {
+  account_id: string;
+  account_name: string;
+  due_date: string;
+  statement_balance: number;
+};
+
+type FinanceSettings = {
+  expendable_cash_account_id: string | null;
+  current_spend_month_start: string;
+  projected_expendable_income: number | null;
+  manual_statements: ManualCreditStatement[];
+};
 
 type Account = {
   account_id: string;
@@ -150,6 +187,7 @@ export default function App() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [hiddenCards, setHiddenCards] = useState<string[]>([]);
+  const [cardOrder, setCardOrder] = useState(defaultDashboardCardOrder);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [newUsername, setNewUsername] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -158,6 +196,20 @@ export default function App() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [transactionCategories, setTransactionCategories] = useState<TransactionCategory[]>([]);
+  const [dashboardMetrics, setDashboardMetrics] = useState<DashboardMetrics>({
+    current_expendable_balance: null,
+    current_total_credit_balance: 0,
+    statement_balance_due: null,
+    projected_expendable_income: null,
+  });
+  const [metricsRefreshKey, setMetricsRefreshKey] = useState(0);
+  const [financeSettings, setFinanceSettings] = useState<FinanceSettings | null>(null);
+  const [financeSettingsLoading, setFinanceSettingsLoading] = useState(false);
+  const [expendableAccountSelection, setExpendableAccountSelection] = useState("");
+  const [projectedIncomeInput, setProjectedIncomeInput] = useState("");
+  const [statementAccountSelection, setStatementAccountSelection] = useState("");
+  const [statementDueDate, setStatementDueDate] = useState(() => transactionDateKey(new Date()));
+  const [statementBalanceInput, setStatementBalanceInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -250,6 +302,7 @@ export default function App() {
       setAccounts(accountRows);
       setTransactions(transactionRows);
       setTransactionCategories(categoryRows);
+      setMetricsRefreshKey((current) => current + 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load financial data");
     } finally {
@@ -263,8 +316,9 @@ export default function App() {
         setAuthenticated(value);
         setProfile(user);
         if (user) {
-          const preferences = await api<{ hidden_cards: string[] }>("/api/me/preferences");
+          const preferences = await api<DashboardPreferences>("/api/me/preferences");
           setHiddenCards(preferences.hidden_cards);
+          setCardOrder(normalizeDashboardCardOrder(preferences.card_order));
           if (user.role === "admin") {
             setProfiles(await api<Profile[]>("/api/admin/users"));
           }
@@ -281,6 +335,51 @@ export default function App() {
     () => getStatisticsRange(statisticsPeriod, selectedOverviewMonth),
     [selectedOverviewMonth, statisticsPeriod],
   );
+  useEffect(() => {
+    if (!profile) return;
+    let cancelled = false;
+    const params = new URLSearchParams({
+      start: statisticsRange.start,
+      end: statisticsRange.end,
+      spend_month: selectedOverviewMonth,
+    });
+    api<DashboardMetrics>(`/api/dashboard/metrics?${params.toString()}`)
+      .then((metrics) => {
+        if (!cancelled) setDashboardMetrics(metrics);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Could not load dashboard finance metrics");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [metricsRefreshKey, profile, selectedOverviewMonth, statisticsRange]);
+
+  useEffect(() => {
+    if (profile?.role !== "admin" || activePage !== "administration" || adminSection !== "finance") return;
+    let cancelled = false;
+    setFinanceSettingsLoading(true);
+    api<FinanceSettings>("/api/admin/finance-settings")
+      .then((settings) => {
+        if (cancelled) return;
+        setFinanceSettings(settings);
+        setExpendableAccountSelection(settings.expendable_cash_account_id ?? "");
+        setProjectedIncomeInput(settings.projected_expendable_income?.toString() ?? "");
+        if (!statementAccountSelection) {
+          setStatementAccountSelection(accounts.find((account) => account.type.toLowerCase() === "credit")?.account_id ?? "");
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Could not load financial management settings");
+      })
+      .finally(() => {
+        if (!cancelled) setFinanceSettingsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activePage, adminSection, accounts, profile, metricsRefreshKey, statementAccountSelection]);
+
   const latestOverviewMonth = monthKey(new Date());
   const overviewMonthOptions = useMemo(() => {
     const startMonth = monthHistoryStart > latestOverviewMonth ? latestOverviewMonth : monthHistoryStart;
@@ -398,8 +497,9 @@ export default function App() {
       setAuthenticated(true);
       setUsername("");
       setPassword("");
-      const preferences = await api<{ hidden_cards: string[] }>("/api/me/preferences");
+      const preferences = await api<DashboardPreferences>("/api/me/preferences");
       setHiddenCards(preferences.hidden_cards);
+      setCardOrder(normalizeDashboardCardOrder(preferences.card_order));
       if (result.user.role === "admin") {
         setProfiles(await api<Profile[]>("/api/admin/users"));
       }
@@ -414,13 +514,32 @@ export default function App() {
       ? hiddenCards.filter((card) => card !== cardID)
       : [...hiddenCards, cardID];
     try {
-      const result = await api<{ hidden_cards: string[] }>("/api/me/preferences", {
+      const result = await api<DashboardPreferences>("/api/me/preferences", {
         method: "PUT",
-        body: JSON.stringify({ hidden_cards: nextHidden }),
+        body: JSON.stringify({ hidden_cards: nextHidden, card_order: cardOrder }),
       });
       setHiddenCards(result.hidden_cards);
+      setCardOrder(normalizeDashboardCardOrder(result.card_order));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save dashboard preferences");
+    }
+  }
+
+  async function moveDashboardCard(cardID: string, direction: -1 | 1) {
+    const currentIndex = cardOrder.indexOf(cardID);
+    const nextIndex = currentIndex + direction;
+    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= cardOrder.length) return;
+    const nextOrder = [...cardOrder];
+    [nextOrder[currentIndex], nextOrder[nextIndex]] = [nextOrder[nextIndex], nextOrder[currentIndex]];
+    try {
+      const result = await api<DashboardPreferences>("/api/me/preferences", {
+        method: "PUT",
+        body: JSON.stringify({ hidden_cards: hiddenCards, card_order: nextOrder }),
+      });
+      setHiddenCards(result.hidden_cards);
+      setCardOrder(normalizeDashboardCardOrder(result.card_order));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save dashboard card order");
     }
   }
 
@@ -501,6 +620,84 @@ export default function App() {
         : `${category.label} transactions included in ${totalName} for all profiles.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not update category settings");
+    }
+  }
+
+  async function saveExpendableAccount(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    setNotice("");
+    try {
+      await api("/api/admin/finance-settings/expendable-account", {
+        method: "PUT",
+        body: JSON.stringify({ account_id: expendableAccountSelection || null }),
+      });
+      setNotice("Current expendable balance account saved.");
+      setMetricsRefreshKey((current) => current + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save the expendable cash account");
+    }
+  }
+
+  async function saveProjectedIncome(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    setNotice("");
+    const amount = Number(projectedIncomeInput);
+    if (!Number.isFinite(amount) || amount < 0) {
+      setError("Projected expendable income must be zero or greater.");
+      return;
+    }
+    try {
+      await api("/api/admin/finance-settings/projected-income", {
+        method: "PUT",
+        body: JSON.stringify({ amount }),
+      });
+      setNotice("Projected expendable income saved for the current spend month.");
+      setMetricsRefreshKey((current) => current + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save projected expendable income");
+    }
+  }
+
+  async function saveManualStatement(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    setNotice("");
+    const amount = Number(statementBalanceInput);
+    if (!Number.isFinite(amount) || amount < 0) {
+      setError("Statement balance must be zero or greater.");
+      return;
+    }
+    try {
+      await api("/api/admin/finance-settings/credit-card-statement", {
+        method: "PUT",
+        body: JSON.stringify({
+          account_id: statementAccountSelection,
+          due_date: statementDueDate,
+          statement_balance: amount,
+        }),
+      });
+      setStatementBalanceInput("");
+      setNotice("Manual credit card statement saved.");
+      setMetricsRefreshKey((current) => current + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save manual statement");
+    }
+  }
+
+  async function deleteManualStatement(statement: ManualCreditStatement) {
+    setError("");
+    setNotice("");
+    try {
+      await api("/api/admin/finance-settings/credit-card-statement", {
+        method: "DELETE",
+        body: JSON.stringify({ account_id: statement.account_id, due_date: statement.due_date.slice(0, 10) }),
+      });
+      setNotice("Manual credit card statement removed.");
+      setMetricsRefreshKey((current) => current + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove manual statement");
     }
   }
 
@@ -697,10 +894,18 @@ export default function App() {
       navigateToPage("overview");
       setAdminSection("users");
       setHiddenCards([]);
+      setCardOrder(defaultDashboardCardOrder);
       setProfiles([]);
       setAccounts([]);
       setTransactions([]);
       setTransactionCategories([]);
+      setFinanceSettings(null);
+      setDashboardMetrics({
+        current_expendable_balance: null,
+        current_total_credit_balance: 0,
+        statement_balance_due: null,
+        projected_expendable_income: null,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not sign out");
     }
@@ -917,30 +1122,95 @@ export default function App() {
                   {passwordPanel}
                 </>
               ) : (
-                <section className="panel settings-panel">
-                  <div className="panel-heading">
-                    <div><h2>Monthly total exclusions</h2><p>Exclude categories from Spending or Income. Monthly Net uses the adjusted totals for every profile.</p></div>
-                  </div>
-                  <div className="category-exclusion-groups">
-                    {(["expense", "income"] as const).map((categoryType) => (
-                      <section className="category-exclusion-group" key={categoryType}>
-                        <h3>{categoryType === "expense" ? "Spending" : "Income"}</h3>
-                        <div className="preference-list">
-                          {transactionCategories.filter((category) => category.category_type === categoryType).map((category) => (
-                            <label className="preference-option" key={category.category_id}>
-                              <input
-                                type="checkbox"
-                                checked={category.excluded_from_totals}
-                                onChange={(event) => void setCategoryExcluded(category, event.target.checked)}
-                              />
-                              Exclude {category.label} from {categoryType === "expense" ? "spending" : "income"}
-                            </label>
+                <>
+                  <section className="panel settings-panel">
+                    <div className="panel-heading">
+                      <div><h2>Overview balances and projection</h2><p>Configure the account and projected income shown on every profile’s Overview.</p></div>
+                    </div>
+                    {financeSettingsLoading || !financeSettings ? (
+                      <div className="empty-state compact">{financeSettingsLoading ? "Loading finance settings…" : "Finance settings are unavailable."}</div>
+                    ) : (
+                      <>
+                        <form className="profile-form finance-form" onSubmit={saveExpendableAccount}>
+                          <label>Current Expendable balance account
+                            <select value={expendableAccountSelection} onChange={(event) => setExpendableAccountSelection(event.target.value)}>
+                              <option value="">Select a cash account</option>
+                              {cashAccounts.map((account) => (
+                                <option key={account.account_id} value={account.account_id}>
+                                  {account.official_name || account.name}{account.mask ? ` ···· ${account.mask}` : ""}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <button className="secondary-button" type="submit">Save account</button>
+                        </form>
+                        <form className="profile-form finance-form" onSubmit={saveProjectedIncome}>
+                          <label>Projected Expendable income · spend month starting {new Date(`${financeSettings.current_spend_month_start.slice(0, 10)}T00:00:00`).toLocaleDateString()}
+                            <input type="number" min="0" step="0.01" value={projectedIncomeInput} onChange={(event) => setProjectedIncomeInput(event.target.value)} required />
+                          </label>
+                          <button className="secondary-button" type="submit">Save projection</button>
+                        </form>
+                        <p className="finance-help">A projection can be changed during its spend month and is frozen in the database after the cycle ends on the 3rd.</p>
+                      </>
+                    )}
+                  </section>
+
+                  <section className="panel settings-panel">
+                    <div className="panel-heading">
+                      <div><h2>Credit card statement balances</h2><p>Plaid statement data is used where available; enter statements manually when it is not.</p></div>
+                    </div>
+                    <form className="profile-form finance-form" onSubmit={saveManualStatement}>
+                      <label>Credit account
+                        <select value={statementAccountSelection} onChange={(event) => setStatementAccountSelection(event.target.value)} required>
+                          <option value="">Select a credit account</option>
+                          {accounts.filter((account) => account.type.toLowerCase() === "credit").map((account) => (
+                            <option key={account.account_id} value={account.account_id}>
+                              {account.official_name || account.name}{account.mask ? ` ···· ${account.mask}` : ""}
+                            </option>
                           ))}
+                        </select>
+                      </label>
+                      <label>Due date<input type="date" value={statementDueDate} onChange={(event) => setStatementDueDate(event.target.value)} required /></label>
+                      <label>Statement balance<input type="number" min="0" step="0.01" value={statementBalanceInput} onChange={(event) => setStatementBalanceInput(event.target.value)} required /></label>
+                      <button className="primary-button" type="submit" disabled={!accounts.some((account) => account.type.toLowerCase() === "credit")}>Save statement</button>
+                    </form>
+                    <div className="manual-statement-list">
+                      <h3>Manual entries</h3>
+                      {financeSettings?.manual_statements.length ? financeSettings.manual_statements.map((statement) => (
+                        <div className="manual-statement-row" key={`${statement.account_id}-${statement.due_date}`}>
+                          <div><strong>{statement.account_name}</strong><span>Due {new Date(`${statement.due_date.slice(0, 10)}T00:00:00`).toLocaleDateString()}</span></div>
+                          <strong>{money(statement.statement_balance)}</strong>
+                          <button className="secondary-button" type="button" onClick={() => void deleteManualStatement(statement)}>Remove</button>
                         </div>
-                      </section>
-                    ))}
-                  </div>
-                </section>
+                      )) : <p className="finance-help">No manual statement entries.</p>}
+                    </div>
+                  </section>
+
+                  <section className="panel settings-panel">
+                    <div className="panel-heading">
+                      <div><h2>Monthly total exclusions</h2><p>Exclude categories from Spending or Income. Monthly Net uses the adjusted totals for every profile.</p></div>
+                    </div>
+                    <div className="category-exclusion-groups">
+                      {(["expense", "income"] as const).map((categoryType) => (
+                        <section className="category-exclusion-group" key={categoryType}>
+                          <h3>{categoryType === "expense" ? "Spending" : "Income"}</h3>
+                          <div className="preference-list">
+                            {transactionCategories.filter((category) => category.category_type === categoryType).map((category) => (
+                              <label className="preference-option" key={category.category_id}>
+                                <input
+                                  type="checkbox"
+                                  checked={category.excluded_from_totals}
+                                  onChange={(event) => void setCategoryExcluded(category, event.target.checked)}
+                                />
+                                Exclude {category.label} from {categoryType === "expense" ? "spending" : "income"}
+                              </label>
+                            ))}
+                          </div>
+                        </section>
+                      ))}
+                    </div>
+                  </section>
+                </>
               )}
             </>
           ) : passwordPanel
@@ -981,6 +1251,7 @@ export default function App() {
                   ><X size={18} /></button>
                 </div>
                 <div className="preference-list">
+                  <strong className="preference-list-heading">Show summary cards</strong>
                   {dashboardCards.map((card) => (
                     <label className="preference-option" key={card.id}>
                       <input
@@ -991,6 +1262,26 @@ export default function App() {
                       {card.label}
                     </label>
                   ))}
+                </div>
+                <div className="card-order-list">
+                  <strong className="preference-list-heading">Card order</strong>
+                  {cardOrder.map((cardID, index) => {
+                    const card = dashboardCards.find((item) => item.id === cardID);
+                    if (!card) return null;
+                    return (
+                      <div className="card-order-row" key={cardID}>
+                        <span>{index + 1}. {card.label}</span>
+                        <div>
+                          <button type="button" aria-label={`Move ${card.label} up`} disabled={index === 0} onClick={() => void moveDashboardCard(cardID, -1)}>
+                            <ChevronDown className="move-card-up" size={15} />
+                          </button>
+                          <button type="button" aria-label={`Move ${card.label} down`} disabled={index === cardOrder.length - 1} onClick={() => void moveDashboardCard(cardID, 1)}>
+                            <ChevronDown size={15} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
                 <div className="statistics-period-control">
                   <div className="statistics-period-copy">
@@ -1016,7 +1307,7 @@ export default function App() {
             </aside>
 
         <div className="summary-grid">
-          {!hiddenCards.includes("income") && <article className="summary-card income-card">
+          {!hiddenCards.includes("income") && <article className="summary-card income-card" style={{ order: cardOrder.indexOf("income") }}>
             <div className="income-summary-heading">
               <div className="summary-label">{incomeDisplay === "expendable" ? "TOTAL EXPENDABLE INCOME" : `TOTAL INCOME ${currentPeriodLabel}`}</div>
               <button
@@ -1028,22 +1319,42 @@ export default function App() {
             <div className="summary-value">{money(incomeDisplay === "expendable" ? totals.expendableIncome : totals.income)}</div>
             <div className="summary-foot positive"><ArrowDownLeft size={15} /> {incomeDisplay === "expendable" ? "Expendable inflows" : "All income inflows"}</div>
           </article>}
-          {!hiddenCards.includes("balance") && <article className="summary-card balance-card">
+          {!hiddenCards.includes("balance") && <article className="summary-card balance-card" style={{ order: cardOrder.indexOf("balance") }}>
             <div className="summary-label">TOTAL CASH ACCOUNT BALANCE</div>
             <div className="summary-value">
               {money(totalCashBalance)}
             </div>
             <div className="summary-foot"><Wallet size={15} /> Across {cashAccounts.length} cash account{cashAccounts.length === 1 ? "" : "s"}</div>
           </article>}
-          {!hiddenCards.includes("spending") && <article className="summary-card">
+          {!hiddenCards.includes("spending") && <article className="summary-card" style={{ order: cardOrder.indexOf("spending") }}>
             <div className="summary-label">SPENDING {currentPeriodLabel}</div>
             <div className="summary-value">{money(totals.spent)}</div>
             <div className="summary-foot"><ArrowUpRight size={15} /> Outflows</div>
           </article>}
-          {!hiddenCards.includes("net") && <article className="summary-card">
+          {!hiddenCards.includes("net") && <article className="summary-card" style={{ order: cardOrder.indexOf("net") }}>
             <div className="summary-label">NET {currentPeriodLabel}</div>
             <div className={`summary-value ${totals.net >= 0 ? "positive-text" : "negative-text"}`}>{money(totals.net)}</div>
             <div className="summary-foot">Income minus spending in selected period</div>
+          </article>}
+          {!hiddenCards.includes("expendable_balance") && <article className="summary-card" style={{ order: cardOrder.indexOf("expendable_balance") }}>
+            <div className="summary-label">CURRENT EXPENDABLE BALANCE</div>
+            <div className="summary-value">{money(dashboardMetrics.current_expendable_balance)}</div>
+            <div className="summary-foot"><Wallet size={15} /> Admin-selected cash account</div>
+          </article>}
+          {!hiddenCards.includes("credit_balance") && <article className="summary-card" style={{ order: cardOrder.indexOf("credit_balance") }}>
+            <div className="summary-label">CURRENT TOTAL CREDIT BALANCE</div>
+            <div className="summary-value">{money(dashboardMetrics.current_total_credit_balance)}</div>
+            <div className="summary-foot">Across {accounts.filter((account) => account.type.toLowerCase() === "credit").length} credit account{accounts.filter((account) => account.type.toLowerCase() === "credit").length === 1 ? "" : "s"}</div>
+          </article>}
+          {!hiddenCards.includes("statement_balance") && <article className="summary-card" style={{ order: cardOrder.indexOf("statement_balance") }}>
+            <div className="summary-label">TOTAL STATEMENT BALANCE DUE</div>
+            <div className="summary-value">{money(dashboardMetrics.statement_balance_due)}</div>
+            <div className="summary-foot">Due {statisticsRange.label}</div>
+          </article>}
+          {!hiddenCards.includes("projected_income") && <article className="summary-card" style={{ order: cardOrder.indexOf("projected_income") }}>
+            <div className="summary-label">PROJECTED EXPENDABLE INCOME</div>
+            <div className="summary-value">{money(dashboardMetrics.projected_expendable_income)}</div>
+            <div className="summary-foot">Selected spend month</div>
           </article>}
         </div>
 

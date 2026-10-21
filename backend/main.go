@@ -83,6 +83,12 @@ func main() {
 	mux.HandleFunc("POST /api/auth/logout", a.logout)
 	mux.Handle("GET /api/me/preferences", a.requireAuth(http.HandlerFunc(a.getPreferences)))
 	mux.Handle("PUT /api/me/preferences", a.requireAuth(http.HandlerFunc(a.updatePreferences)))
+	mux.Handle("GET /api/dashboard/metrics", a.requireAuth(http.HandlerFunc(a.getDashboardMetrics)))
+	mux.Handle("GET /api/admin/finance-settings", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.getFinanceSettings))))
+	mux.Handle("PUT /api/admin/finance-settings/expendable-account", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.setExpendableCashAccount))))
+	mux.Handle("PUT /api/admin/finance-settings/projected-income", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.setProjectedExpendableIncome))))
+	mux.Handle("PUT /api/admin/finance-settings/credit-card-statement", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.saveCreditCardStatement))))
+	mux.Handle("DELETE /api/admin/finance-settings/credit-card-statement", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.deleteCreditCardStatement))))
 	mux.Handle("POST /api/me/password", a.requireAuth(http.HandlerFunc(a.changePassword)))
 	mux.Handle("GET /api/admin/users", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.listUsers))))
 	mux.Handle("POST /api/admin/users", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.createUser))))
@@ -614,7 +620,55 @@ func (a *app) syncItem(ctx context.Context, itemID string) error {
 	if err != nil {
 		return err
 	}
+	liabilities, err := a.plaid.liabilitiesGet(ctx, accessToken)
+	if err != nil {
+		log.Printf("Plaid credit statement data unavailable for Item %s (manual entry remains available): %v", itemID, err)
+	} else if err := a.persistCreditStatements(ctx, liabilities); err != nil {
+		return fmt.Errorf("persist Plaid credit statements: %w", err)
+	}
 	return nil
+}
+
+func (a *app) persistCreditStatements(ctx context.Context, liabilities []plaidCreditLiability) error {
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	for _, liability := range liabilities {
+		if liability.LastStatementBalance == nil || liability.NextPaymentDueDate == nil {
+			continue
+		}
+		dueDate, err := time.Parse("2006-01-02", *liability.NextPaymentDueDate)
+		if err != nil {
+			return fmt.Errorf("parse Plaid payment due date: %w", err)
+		}
+		var statementDate any
+		if liability.LastStatementIssueDate != nil {
+			parsedDate, err := time.Parse("2006-01-02", *liability.LastStatementIssueDate)
+			if err != nil {
+				return fmt.Errorf("parse Plaid statement issue date: %w", err)
+			}
+			statementDate = parsedDate
+		}
+		_, err = tx.Exec(ctx, `
+			INSERT INTO credit_card_statements (
+				account_id, due_date, statement_date, statement_balance, source
+			)
+			SELECT $1, $2, $3, $4, 'plaid'
+			WHERE EXISTS (
+				SELECT 1 FROM accounts WHERE account_id = $1 AND type = 'credit'
+			)
+			ON CONFLICT (account_id, due_date, source) DO UPDATE SET
+				statement_date = EXCLUDED.statement_date,
+				statement_balance = EXCLUDED.statement_balance,
+				updated_at = NOW()`,
+			liability.AccountID, dueDate, statementDate, *liability.LastStatementBalance)
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func (a *app) persistTransactionPage(ctx context.Context, itemID string, result syncResponse) error {
@@ -660,6 +714,9 @@ func (a *app) persistTransactionPage(ctx context.Context, itemID string, result 
 }
 
 func (a *app) runSyncWorker(ctx context.Context) {
+	if err := a.freezeExpiredProjectedIncome(ctx); err != nil {
+		log.Printf("freeze expired projected income at startup: %v", err)
+	}
 	if err := a.syncAll(ctx); err != nil {
 		log.Printf("startup Plaid sync: %v", err)
 	}
@@ -670,6 +727,9 @@ func (a *app) runSyncWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if err := a.freezeExpiredProjectedIncome(ctx); err != nil {
+				log.Printf("freeze expired projected income: %v", err)
+			}
 			if err := a.syncAll(ctx); err != nil {
 				log.Printf("scheduled Plaid sync: %v", err)
 			}

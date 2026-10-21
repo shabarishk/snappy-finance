@@ -85,11 +85,12 @@ func (p *plaidClient) createLinkToken(ctx context.Context) (string, error) {
 		LinkToken string `json:"link_token"`
 	}
 	err := p.post(ctx, "/link/token/create", map[string]any{
-		"client_name":   "Snappy Finance",
-		"language":      "en",
-		"country_codes": []string{"US"},
-		"user":          map[string]string{"client_user_id": "snappy-finance-user"},
-		"products":      []string{"transactions"},
+		"client_name":       "Snappy Finance",
+		"language":          "en",
+		"country_codes":     []string{"US"},
+		"user":              map[string]string{"client_user_id": "snappy-finance-user"},
+		"products":          []string{"transactions"},
+		"optional_products": []string{"liabilities"},
 	}, &result)
 	return result.LinkToken, err
 }
@@ -126,6 +127,23 @@ func (p *plaidClient) accountsGet(ctx context.Context, accessToken string) (stru
 	}
 	err := p.post(ctx, "/accounts/get", map[string]string{"access_token": accessToken}, &result)
 	return result, err
+}
+
+type plaidCreditLiability struct {
+	AccountID              string   `json:"account_id"`
+	LastStatementBalance   *float64 `json:"last_statement_balance"`
+	LastStatementIssueDate *string  `json:"last_statement_issue_date"`
+	NextPaymentDueDate     *string  `json:"next_payment_due_date"`
+}
+
+func (p *plaidClient) liabilitiesGet(ctx context.Context, accessToken string) ([]plaidCreditLiability, error) {
+	var result struct {
+		Liabilities struct {
+			Credit []plaidCreditLiability `json:"credit"`
+		} `json:"liabilities"`
+	}
+	err := p.post(ctx, "/liabilities/get", map[string]string{"access_token": accessToken}, &result)
+	return result.Liabilities.Credit, err
 }
 
 type plaidTransaction struct {

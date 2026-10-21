@@ -41,6 +41,40 @@ CREATE TABLE IF NOT EXISTS accounts (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS finance_settings (
+    setting_id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (setting_id = 1),
+    expendable_cash_account_id TEXT REFERENCES accounts(account_id) ON DELETE SET NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO finance_settings (setting_id)
+VALUES (1)
+ON CONFLICT (setting_id) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS projected_expendable_income (
+    period_start DATE PRIMARY KEY,
+    amount NUMERIC(18, 4) NOT NULL CHECK (amount >= 0),
+    frozen_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS credit_card_statements (
+    account_id TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    due_date DATE NOT NULL,
+    statement_date DATE,
+    statement_balance NUMERIC(18, 4) NOT NULL CHECK (statement_balance >= 0),
+    source TEXT NOT NULL CHECK (source IN ('plaid', 'manual')),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (account_id, due_date, source)
+);
+
+CREATE INDEX IF NOT EXISTS credit_card_statements_due_date_idx ON credit_card_statements (due_date);
+
+UPDATE projected_expendable_income
+SET frozen_at = NOW()
+WHERE frozen_at IS NULL
+  AND period_start + INTERVAL '1 month' - INTERVAL '1 day' < CURRENT_DATE;
+
 CREATE TABLE IF NOT EXISTS transaction_categories (
     category_id TEXT PRIMARY KEY,
     label TEXT NOT NULL,
