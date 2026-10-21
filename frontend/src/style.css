@@ -27,6 +27,8 @@ button { cursor: pointer; }
 .sidebar-bottom { margin-top: auto; }
 .privacy-card { align-items: flex-start; background: #f8faf8; border: 1px solid var(--line); border-radius: 9px; color: var(--green); display: flex; font-size: 12px; gap: 10px; line-height: 1.6; padding: 12px; }
 .privacy-card small { color: var(--muted); font-size: 10px; }
+.profile-identity { border-top: 1px solid var(--line); color: #3b4a43; display: flex; flex-direction: column; font-size: 11px; gap: 3px; margin-top: 18px; padding: 15px 10px 0; }
+.profile-identity span { color: var(--muted); font-size: 10px; }
 .signout-button { align-items: center; background: none; border: 0; color: #7d8983; display: flex; font-size: 12px; gap: 9px; margin-top: 18px; padding: 8px 10px; }
 .main-content { margin-left: 238px; margin-inline: auto; max-width: 1500px; min-height: 100vh; padding: 42px clamp(24px, 5vw, 68px) 24px; }
 .topbar { align-items: center; display: flex; justify-content: space-between; margin-bottom: 30px; }
@@ -51,6 +53,20 @@ button { cursor: pointer; }
 .negative-text { color: #bd554b; }
 .panel { margin-bottom: 18px; overflow: hidden; }
 .panel-heading { align-items: center; border-bottom: 1px solid #eff1ef; display: flex; justify-content: space-between; padding: 19px 22px; }
+.settings-panel { margin-bottom: 16px; }
+.preference-list { display: flex; flex-wrap: wrap; gap: 10px 22px; padding: 17px 21px; }
+.preference-option { align-items: center; color: #52615a; display: flex; font-size: 11px; gap: 8px; }
+.preference-option input { accent-color: var(--green); }
+.profile-list { padding: 0 21px; }
+.profile-row { align-items: center; border-top: 1px solid var(--line); display: flex; font-size: 11px; justify-content: space-between; padding: 10px 0; }
+.profile-row span { color: var(--muted); font-size: 10px; }
+.profile-form { align-items: end; display: flex; flex-wrap: wrap; gap: 12px; padding: 16px 21px 20px; }
+.profile-form label { color: #52615a; display: flex; flex: 1 1 190px; flex-direction: column; font-size: 10px; font-weight: 600; gap: 6px; }
+.profile-form input { border: 1px solid #dce4de; border-radius: 7px; font-size: 12px; height: 38px; outline: none; padding: 0 10px; }
+.profile-form input:focus { border-color: #78b89b; box-shadow: 0 0 0 3px #19856815; }
+.password-panel { margin-bottom: 18px; padding: 15px 0 0; }
+.password-panel summary { color: #52615a; cursor: pointer; font-size: 12px; font-weight: 600; padding: 0 21px 15px; }
+.password-panel .profile-form { border-top: 1px solid var(--line); }
 .panel-heading h2 { font-family: "Segoe UI", system-ui, sans-serif; font-size: 15px; letter-spacing: -.02em; margin: 0; }
 .panel-heading p { color: var(--muted); font-size: 11px; margin: 5px 0 0; }
 .account-list, .transaction-list { padding: 0 22px; }

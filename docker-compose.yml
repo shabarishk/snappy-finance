@@ -19,7 +19,9 @@ services:
       context: ./backend
     restart: unless-stopped
     environment:
-      APP_PASSWORD: ${APP_PASSWORD:?Set APP_PASSWORD in .env}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      APP_PASSWORD: ${APP_PASSWORD:-}
       SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET in .env}
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?Set APP_ENCRYPTION_KEY in .env}
       PGHOST: db

@@ -1,13 +1,15 @@
 package main
 
 import (
-	"net/http"
-	"net/http/httptest"
+	"crypto/hmac"
+	"strings"
 	"testing"
 )
 
 func TestLoadConfigDemoData(t *testing.T) {
 	t.Setenv("APP_PASSWORD", "test-password-with-12")
+	t.Setenv("ADMIN_PASSWORD", "")
+	t.Setenv("ADMIN_USERNAME", "admin")
 	t.Setenv("SESSION_SECRET", "a-session-secret-with-at-least-32-characters")
 	t.Setenv("APP_ENCRYPTION_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
 	t.Setenv("DEMO_DATA", "true")
@@ -18,6 +20,9 @@ func TestLoadConfigDemoData(t *testing.T) {
 	}
 	if !cfg.demoData {
 		t.Fatal("demo data should be enabled")
+	}
+	if cfg.adminPassword != "test-password-with-12" {
+		t.Fatalf("admin password fallback = %q, want APP_PASSWORD", cfg.adminPassword)
 	}
 }
 
@@ -44,20 +49,42 @@ func TestEncryptDecrypt(t *testing.T) {
 	}
 }
 
-func TestSessionCookieAuthentication(t *testing.T) {
-	a := &app{
-		cfg:       config{sessionSecret: []byte("a-session-secret-that-is-long-enough")},
-		sessionID: "test-user",
+func TestNormalizeUsername(t *testing.T) {
+	username, err := normalizeUsername("  Alex_01 ")
+	if err != nil {
+		t.Fatalf("normalizeUsername: %v", err)
 	}
-	request := httptest.NewRequest("GET", "/", nil)
-	request.AddCookie(&http.Cookie{Name: "snappy_session", Value: a.sessionCookie()})
-	if !a.isAuthenticated(request) {
-		t.Fatal("valid session cookie was rejected")
+	if username != "alex_01" {
+		t.Fatalf("normalized username = %q, want alex_01", username)
 	}
+	for _, invalid := range []string{"ab", "invalid name", "bad/name", strings.Repeat("x", 33)} {
+		if _, err := normalizeUsername(invalid); err == nil {
+			t.Errorf("normalizeUsername(%q) unexpectedly succeeded", invalid)
+		}
+	}
+}
 
-	request = httptest.NewRequest("GET", "/", nil)
-	request.AddCookie(&http.Cookie{Name: "snappy_session", Value: "1.invalid"})
-	if a.isAuthenticated(request) {
-		t.Fatal("expired or invalid session cookie was accepted")
+func TestValidatePassword(t *testing.T) {
+	if err := validatePassword("twelve-characters"); err != nil {
+		t.Fatalf("valid password rejected: %v", err)
+	}
+	for _, password := range []string{"short", strings.Repeat("a", 73)} {
+		if err := validatePassword(password); err == nil {
+			t.Errorf("validatePassword(%q) unexpectedly succeeded", password)
+		}
+	}
+}
+
+func TestSessionTokenHash(t *testing.T) {
+	a := &app{cfg: config{sessionSecret: []byte("a-session-secret-that-is-long-enough")}}
+	first := a.sessionTokenHash("opaque-token")
+	if string(first) == "opaque-token" {
+		t.Fatal("session token hash contains plaintext token")
+	}
+	if !hmac.Equal(first, a.sessionTokenHash("opaque-token")) {
+		t.Fatal("same session token produced different hashes")
+	}
+	if hmac.Equal(first, a.sessionTokenHash("different-token")) {
+		t.Fatal("different session tokens produced the same hash")
 	}
 }

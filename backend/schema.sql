@@ -1,3 +1,22 @@
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('admin', 'user')),
+    dashboard_preferences JSONB NOT NULL DEFAULT '{"hidden_cards":[]}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    disabled_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS user_sessions (
+    token_hash BYTEA PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS user_sessions_user_id_idx ON user_sessions (user_id);
+
 CREATE TABLE IF NOT EXISTS plaid_items (
     item_id TEXT PRIMARY KEY,
     access_token_encrypted BYTEA NOT NULL,

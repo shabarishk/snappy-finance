@@ -4,10 +4,7 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -16,7 +13,6 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -26,7 +22,8 @@ import (
 type config struct {
 	addr          string
 	databaseURL   string
-	appPassword   string
+	adminUsername string
+	adminPassword string
 	sessionSecret []byte
 	encryptionKey []byte
 	plaidEnv      string
@@ -40,7 +37,6 @@ type app struct {
 	cfg       config
 	db        *pgxpool.Pool
 	plaid     *plaidClient
-	sessionID string
 }
 
 func main() {
@@ -62,6 +58,9 @@ func main() {
 	if err := initializeSchema(ctx, db); err != nil {
 		log.Fatalf("initialize database schema: %v", err)
 	}
+	if err := bootstrapAdmin(ctx, db, cfg.adminUsername, cfg.adminPassword); err != nil {
+		log.Fatalf("initialize administrator account: %v", err)
+	}
 	if cfg.demoData {
 		if err := seedDemoData(ctx, db, cfg.encryptionKey); err != nil {
 			log.Fatalf("seed demo data: %v", err)
@@ -69,10 +68,9 @@ func main() {
 	}
 
 	a := &app{
-		cfg:       cfg,
-		db:        db,
-		plaid:     newPlaidClient(cfg),
-		sessionID: base64.RawURLEncoding.EncodeToString(cfg.sessionSecret[:16]),
+		cfg:   cfg,
+		db:    db,
+		plaid: newPlaidClient(cfg),
 	}
 	go a.runSyncWorker(ctx)
 
@@ -81,9 +79,14 @@ func main() {
 	mux.HandleFunc("GET /api/auth/session", a.session)
 	mux.HandleFunc("POST /api/auth/login", a.login)
 	mux.HandleFunc("POST /api/auth/logout", a.logout)
-	mux.Handle("POST /api/plaid/link-token", a.requireAuth(http.HandlerFunc(a.createLinkToken)))
-	mux.Handle("POST /api/plaid/exchange", a.requireAuth(http.HandlerFunc(a.exchangePublicToken)))
-	mux.Handle("POST /api/plaid/sync", a.requireAuth(http.HandlerFunc(a.syncNow)))
+	mux.Handle("GET /api/me/preferences", a.requireAuth(http.HandlerFunc(a.getPreferences)))
+	mux.Handle("PUT /api/me/preferences", a.requireAuth(http.HandlerFunc(a.updatePreferences)))
+	mux.Handle("POST /api/me/password", a.requireAuth(http.HandlerFunc(a.changePassword)))
+	mux.Handle("GET /api/admin/users", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.listUsers))))
+	mux.Handle("POST /api/admin/users", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.createUser))))
+	mux.Handle("POST /api/plaid/link-token", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.createLinkToken))))
+	mux.Handle("POST /api/plaid/exchange", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.exchangePublicToken))))
+	mux.Handle("POST /api/plaid/sync", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.syncNow))))
 	mux.Handle("GET /api/accounts", a.requireAuth(http.HandlerFunc(a.listAccounts)))
 	mux.Handle("GET /api/transactions", a.requireAuth(http.HandlerFunc(a.listTransactions)))
 	mux.Handle("/", webassets.Handler())
@@ -107,7 +110,11 @@ func loadConfig() (config, error) {
 	var err error
 	cfg.addr = env("HTTP_ADDR", ":8080")
 	cfg.databaseURL = os.Getenv("DATABASE_URL")
-	cfg.appPassword = os.Getenv("APP_PASSWORD")
+	cfg.adminUsername = env("ADMIN_USERNAME", "admin")
+	cfg.adminPassword = os.Getenv("ADMIN_PASSWORD")
+	if cfg.adminPassword == "" {
+		cfg.adminPassword = os.Getenv("APP_PASSWORD")
+	}
 	cfg.plaidEnv = env("PLAID_ENV", "sandbox")
 	cfg.plaidClientID = os.Getenv("PLAID_CLIENT_ID")
 	cfg.plaidSecret = os.Getenv("PLAID_SECRET")
@@ -119,11 +126,13 @@ func loadConfig() (config, error) {
 		}
 	}
 
-	if cfg.appPassword == "" {
-		return cfg, errors.New("APP_PASSWORD is required")
+	if cfg.adminUsername, err = normalizeUsername(cfg.adminUsername); err != nil {
+		return cfg, fmt.Errorf("ADMIN_USERNAME: %w", err)
 	}
-	if len(cfg.appPassword) < 12 {
-		return cfg, errors.New("APP_PASSWORD must be at least 12 characters")
+	if cfg.adminPassword != "" {
+		if err := validatePassword(cfg.adminPassword); err != nil {
+			return cfg, fmt.Errorf("ADMIN_PASSWORD: %w", err)
+		}
 	}
 	sessionSecret := os.Getenv("SESSION_SECRET")
 	if len(sessionSecret) < 32 {
@@ -169,83 +178,6 @@ func (a *app) health(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-func (a *app) session(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": a.isAuthenticated(r)})
-}
-
-func (a *app) login(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		Password string `json:"password"`
-	}
-	if err := decodeJSON(r, &input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON request")
-		return
-	}
-	expected := sha256.Sum256([]byte(a.cfg.appPassword))
-	provided := sha256.Sum256([]byte(input.Password))
-	if subtle.ConstantTimeCompare(expected[:], provided[:]) != 1 {
-		writeError(w, http.StatusUnauthorized, "invalid password")
-		return
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     "snappy_session",
-		Value:    a.sessionCookie(),
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   isHTTPS(r),
-		SameSite: http.SameSiteStrictMode,
-		MaxAge:   86400,
-	})
-	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": true})
-}
-
-func (a *app) logout(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{
-		Name: "snappy_session", Value: "", Path: "/", HttpOnly: true,
-		Secure: isHTTPS(r), SameSite: http.SameSiteStrictMode, MaxAge: -1,
-	})
-	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})
-}
-
-func (a *app) sessionCookie() string {
-	expiry := strconv.FormatInt(time.Now().Add(24*time.Hour).Unix(), 10)
-	mac := hmac.New(sha256.New, a.cfg.sessionSecret)
-	_, _ = mac.Write([]byte(expiry + ":" + a.sessionID))
-	return expiry + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-}
-
-func (a *app) isAuthenticated(r *http.Request) bool {
-	cookie, err := r.Cookie("snappy_session")
-	if err != nil {
-		return false
-	}
-	parts := strings.Split(cookie.Value, ".")
-	if len(parts) != 2 {
-		return false
-	}
-	expiry, err := strconv.ParseInt(parts[0], 10, 64)
-	if err != nil || time.Now().Unix() > expiry {
-		return false
-	}
-	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return false
-	}
-	mac := hmac.New(sha256.New, a.cfg.sessionSecret)
-	_, _ = mac.Write([]byte(parts[0] + ":" + a.sessionID))
-	return hmac.Equal(signature, mac.Sum(nil))
-}
-
-func (a *app) requireAuth(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !a.isAuthenticated(r) {
-			writeError(w, http.StatusUnauthorized, "authentication required")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 func (a *app) createLinkToken(w http.ResponseWriter, r *http.Request) {

@@ -27,9 +27,10 @@ function New-RandomBase64([int]$ByteCount) {
 
 try {
     if (-not (Test-Path ".env")) {
-        $appPassword = (New-RandomBase64 24).TrimEnd("=").Replace("+", "-").Replace("/", "_")
+        $adminPassword = (New-RandomBase64 24).TrimEnd("=").Replace("+", "-").Replace("/", "_")
         $lines = @(
-            "APP_PASSWORD=$appPassword"
+            "ADMIN_USERNAME=admin"
+            "ADMIN_PASSWORD=$adminPassword"
             "SESSION_SECRET=$(New-RandomBase64 48)"
             "APP_ENCRYPTION_KEY=$(New-RandomBase64 32)"
             "POSTGRES_PASSWORD=$(New-RandomBase64 32)"
@@ -37,7 +38,8 @@ try {
         )
         Set-Content -Path ".env" -Value $lines -Encoding ASCII
         Write-Host "Created .env with local-only credentials and demo data enabled."
-        Write-Host "Sign-in password: $appPassword"
+        Write-Host "Sign-in username: admin"
+        Write-Host "Sign-in password: $adminPassword"
     } else {
         Write-Host "Using the existing .env without changing it. The demo uses a separate Compose project and database volume."
     }

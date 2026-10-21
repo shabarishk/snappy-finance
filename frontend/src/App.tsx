@@ -1,6 +1,19 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowDownLeft, ArrowUpRight, Banknote, Landmark, LockKeyhole, LogOut, RefreshCw, Wallet } from "lucide-react";
 
+type Profile = {
+  id: string;
+  username: string;
+  role: "admin" | "user";
+};
+
+const dashboardCards = [
+  { id: "balance", label: "Total account balance" },
+  { id: "income", label: "Income this month" },
+  { id: "spending", label: "Spending this month" },
+  { id: "net", label: "Monthly net" },
+];
+
 type Account = {
   account_id: string;
   name: string;
@@ -60,7 +73,15 @@ function money(value: number | null, currency: string | null = "USD") {
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [hiddenCards, setHiddenCards] = useState<string[]>([]);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [newUsername, setNewUsername] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [replacementPassword, setReplacementPassword] = useState("");
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(false);
@@ -86,13 +107,22 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    api<{ authenticated: boolean }>("/api/auth/session")
-      .then(({ authenticated: value }) => {
+    api<{ authenticated: boolean; user: Profile | null }>("/api/auth/session")
+      .then(async ({ authenticated: value, user }) => {
         setAuthenticated(value);
-        if (value) void refresh();
+        setProfile(user);
+        if (user) {
+          const preferences = await api<{ hidden_cards: string[] }>("/api/me/preferences");
+          setHiddenCards(preferences.hidden_cards);
+          if (user.role === "admin") {
+            setProfiles(await api<Profile[]>("/api/admin/users"));
+          }
+          await refresh();
+        }
       })
       .catch(() => {
         setAuthenticated(false);
+        setProfile(null);
       });
   }, [refresh]);
 
@@ -109,12 +139,72 @@ export default function App() {
     event.preventDefault();
     setError("");
     try {
-      await api("/api/auth/login", { method: "POST", body: JSON.stringify({ password }) });
+      const result = await api<{ user: Profile }>("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ username, password }),
+      });
+      setProfile(result.user);
       setAuthenticated(true);
+      setUsername("");
       setPassword("");
+      const preferences = await api<{ hidden_cards: string[] }>("/api/me/preferences");
+      setHiddenCards(preferences.hidden_cards);
+      if (result.user.role === "admin") {
+        setProfiles(await api<Profile[]>("/api/admin/users"));
+      }
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sign in failed");
+    }
+  }
+
+  async function savePreferences(cardID: string, visible: boolean) {
+    const nextHidden = visible
+      ? hiddenCards.filter((card) => card !== cardID)
+      : [...hiddenCards, cardID];
+    try {
+      const result = await api<{ hidden_cards: string[] }>("/api/me/preferences", {
+        method: "PUT",
+        body: JSON.stringify({ hidden_cards: nextHidden }),
+      });
+      setHiddenCards(result.hidden_cards);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save dashboard preferences");
+    }
+  }
+
+  async function createProfile(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    setNotice("");
+    try {
+      await api("/api/admin/users", {
+        method: "POST",
+        body: JSON.stringify({ username: newUsername, password: newPassword }),
+      });
+      setNewUsername("");
+      setNewPassword("");
+      setProfiles(await api<Profile[]>("/api/admin/users"));
+      setNotice("Household profile created.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create profile");
+    }
+  }
+
+  async function changePassword(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    setNotice("");
+    try {
+      await api("/api/me/password", {
+        method: "POST",
+        body: JSON.stringify({ current_password: currentPassword, new_password: replacementPassword }),
+      });
+      setCurrentPassword("");
+      setReplacementPassword("");
+      setNotice("Password changed.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not change password");
     }
   }
 
@@ -169,10 +259,17 @@ export default function App() {
   }
 
   async function signOut() {
-    await api("/api/auth/logout", { method: "POST" });
-    setAuthenticated(false);
-    setAccounts([]);
-    setTransactions([]);
+    try {
+      await api("/api/auth/logout", { method: "POST" });
+      setAuthenticated(false);
+      setProfile(null);
+      setHiddenCards([]);
+      setProfiles([]);
+      setAccounts([]);
+      setTransactions([]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not sign out");
+    }
   }
 
   if (authenticated === null) {
@@ -187,7 +284,15 @@ export default function App() {
           <p className="eyebrow">SNAPPY FINANCE</p>
           <h1>Your money, in focus.</h1>
           <p className="muted">Sign in to your private finance dashboard.</p>
-          <label htmlFor="password">App password</label>
+          <label htmlFor="username">Username</label>
+          <input
+            id="username"
+            autoComplete="username"
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
+            required
+          />
+          <label htmlFor="password">Password</label>
           <input
             id="password"
             type="password"
@@ -213,6 +318,10 @@ export default function App() {
         <a className="nav-item" href="#accounts"><Landmark size={18} /> Accounts</a>
         <div className="sidebar-bottom">
           <div className="privacy-card"><LockKeyhole size={16} /><span>Private by design<br /><small>Your data is self-hosted</small></span></div>
+          <div className="profile-identity">
+            <strong>{profile?.username}</strong>
+            <span>{profile?.role === "admin" ? "Administrator" : "Household profile"}</span>
+          </div>
           <button className="signout-button" onClick={() => void signOut()}><LogOut size={16} /> Sign out</button>
         </div>
       </aside>
@@ -221,12 +330,14 @@ export default function App() {
         <header className="topbar">
           <div><p className="eyebrow">YOUR FINANCES</p><h1>Overview</h1></div>
           <div className="topbar-actions">
-            <button className="secondary-button" onClick={() => void syncNow()} disabled={busy || !accounts.some((account) => !account.demo_data)}>
-              <RefreshCw size={16} className={busy ? "spin" : ""} /> Sync
-            </button>
-            <button className="primary-button" onClick={() => void connectAccount()} disabled={busy}>
-              <span>+</span> Connect account
-            </button>
+            {profile?.role === "admin" && <>
+              <button className="secondary-button" onClick={() => void syncNow()} disabled={busy || !accounts.some((account) => !account.demo_data)}>
+                <RefreshCw size={16} className={busy ? "spin" : ""} /> Sync
+              </button>
+              <button className="primary-button" onClick={() => void connectAccount()} disabled={busy}>
+                <span>+</span> Connect account
+              </button>
+            </>}
           </div>
         </header>
 
@@ -236,29 +347,73 @@ export default function App() {
         {error && <div className="alert error-message">{error}</div>}
         {notice && <div className="alert success-message">{notice}</div>}
 
+        <section className="panel settings-panel">
+          <div className="panel-heading"><div><h2>Dashboard preferences</h2><p>Choose which summary cards appear on your dashboard.</p></div></div>
+          <div className="preference-list">
+            {dashboardCards.map((card) => (
+              <label className="preference-option" key={card.id}>
+                <input
+                  type="checkbox"
+                  checked={!hiddenCards.includes(card.id)}
+                  onChange={(event) => void savePreferences(card.id, event.target.checked)}
+                />
+                {card.label}
+              </label>
+            ))}
+          </div>
+        </section>
+
+        {profile?.role === "admin" && (
+          <section className="panel settings-panel">
+            <div className="panel-heading"><div><h2>Household profiles</h2><p>Profiles share financial data; each person has their own dashboard and password.</p></div></div>
+            <div className="profile-list">
+              {profiles.map((item) => (
+                <div className="profile-row" key={item.id}>
+                  <strong>{item.username}</strong>
+                  <span>{item.role === "admin" ? "Administrator" : "Household user"}</span>
+                </div>
+              ))}
+            </div>
+            <form className="profile-form" onSubmit={createProfile}>
+              <label>New username<input autoComplete="off" minLength={3} maxLength={32} value={newUsername} onChange={(event) => setNewUsername(event.target.value)} required /></label>
+              <label>Temporary password<input type="password" autoComplete="new-password" minLength={12} maxLength={72} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required /></label>
+              <button className="primary-button" type="submit">Create household profile</button>
+            </form>
+          </section>
+        )}
+
+        <details className="panel password-panel">
+          <summary>Change my password</summary>
+          <form className="profile-form" onSubmit={changePassword}>
+            <label>Current password<input type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /></label>
+            <label>New password<input type="password" autoComplete="new-password" minLength={12} maxLength={72} value={replacementPassword} onChange={(event) => setReplacementPassword(event.target.value)} required /></label>
+            <button className="secondary-button" type="submit">Update password</button>
+          </form>
+        </details>
+
         <div className="summary-grid">
-          <article className="summary-card balance-card">
+          {!hiddenCards.includes("balance") && <article className="summary-card balance-card">
             <div className="summary-label">TOTAL ACCOUNT BALANCE</div>
             <div className="summary-value">
               {money(accounts.reduce((sum, account) => sum + (account.current_balance ?? 0), 0))}
             </div>
             <div className="summary-foot"><Wallet size={15} /> Across {accounts.length} connected account{accounts.length === 1 ? "" : "s"}</div>
-          </article>
-          <article className="summary-card">
+          </article>}
+          {!hiddenCards.includes("income") && <article className="summary-card">
             <div className="summary-label">INCOME THIS MONTH</div>
             <div className="summary-value">{money(totals.income)}</div>
             <div className="summary-foot positive"><ArrowDownLeft size={15} /> Inflows</div>
-          </article>
-          <article className="summary-card">
+          </article>}
+          {!hiddenCards.includes("spending") && <article className="summary-card">
             <div className="summary-label">SPENDING THIS MONTH</div>
             <div className="summary-value">{money(totals.spent)}</div>
             <div className="summary-foot"><ArrowUpRight size={15} /> Outflows</div>
-          </article>
-          <article className="summary-card">
+          </article>}
+          {!hiddenCards.includes("net") && <article className="summary-card">
             <div className="summary-label">MONTHLY NET</div>
             <div className={`summary-value ${totals.net >= 0 ? "positive-text" : "negative-text"}`}>{money(totals.net)}</div>
             <div className="summary-foot">Income minus spending</div>
-          </article>
+          </article>}
         </div>
 
         <section className="panel" id="accounts">
@@ -267,8 +422,8 @@ export default function App() {
             <div className="empty-state">
               <span className="empty-icon"><Landmark size={22} /></span>
               <strong>No accounts connected yet</strong>
-              <span>Connect a bank to see your balances and transactions.</span>
-              <button className="primary-button" onClick={() => void connectAccount()} disabled={busy}>Connect your first account</button>
+              <span>{profile?.role === "admin" ? "Connect a bank to see your balances and transactions." : "Ask your household administrator to connect a bank account."}</span>
+              {profile?.role === "admin" && <button className="primary-button" onClick={() => void connectAccount()} disabled={busy}>Connect your first account</button>}
             </div>
           ) : (
             <div className="account-list">
