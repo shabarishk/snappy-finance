@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowDownLeft, ArrowUpRight, Banknote, Eye, EyeOff, Landmark, LockKeyhole, LogOut, RefreshCw, Wallet } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Banknote, Eye, EyeOff, Landmark, LockKeyhole, LogOut, RefreshCw, UsersRound, Wallet } from "lucide-react";
 
 type Profile = {
   id: string;
@@ -81,6 +81,9 @@ function money(value: number | null, currency: string | null = "USD") {
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [activePage, setActivePage] = useState<"overview" | "administration">(() =>
+    window.location.hash === "#administration" ? "administration" : "overview",
+  );
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [hiddenCards, setHiddenCards] = useState<string[]>([]);
@@ -95,6 +98,19 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    const syncPageFromHash = () => {
+      setActivePage(window.location.hash === "#administration" ? "administration" : "overview");
+    };
+    window.addEventListener("hashchange", syncPageFromHash);
+    return () => window.removeEventListener("hashchange", syncPageFromHash);
+  }, []);
+
+  function navigateToPage(page: "overview" | "administration") {
+    setActivePage(page);
+    if (window.location.hash !== `#${page}`) window.location.hash = page;
+  }
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -307,6 +323,7 @@ export default function App() {
       await api("/api/auth/logout", { method: "POST" });
       setAuthenticated(false);
       setProfile(null);
+      navigateToPage("overview");
       setHiddenCards([]);
       setProfiles([]);
       setAccounts([]);
@@ -357,10 +374,28 @@ export default function App() {
     <main className="app-shell">
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark"><Wallet size={19} /></span><span>snappy<span className="brand-light">finance</span></span></div>
-        <div className="nav-label">WORKSPACE</div>
-        <a className="nav-item active" href="#overview"><Banknote size={18} /> Overview</a>
-        <a className="nav-item" href="#accounts"><Landmark size={18} /> Accounts</a>
+        <nav className="sidebar-nav" aria-label="Workspace">
+          <div className="nav-label">WORKSPACE</div>
+          <button
+            className={`nav-item ${activePage === "overview" ? "active" : ""}`}
+            onClick={() => navigateToPage("overview")}
+            aria-current={activePage === "overview" ? "page" : undefined}
+          ><Banknote size={18} /> Overview</button>
+          <button
+            className="nav-item"
+            onClick={() => {
+              setActivePage("overview");
+              if (window.location.hash !== "#accounts") window.location.hash = "accounts";
+              window.requestAnimationFrame(() => document.getElementById("accounts")?.scrollIntoView({ behavior: "smooth" }));
+            }}
+          ><Landmark size={18} /> Accounts</button>
+        </nav>
         <div className="sidebar-bottom">
+          <button
+            className={`nav-item admin-nav-item ${activePage === "administration" ? "active" : ""}`}
+            onClick={() => navigateToPage("administration")}
+            aria-current={activePage === "administration" ? "page" : undefined}
+          ><UsersRound size={18} /> Administration</button>
           <div className="privacy-card"><LockKeyhole size={16} /><span>Private by design<br /><small>Your data is self-hosted</small></span></div>
           <div className="profile-identity">
             <strong>{profile?.username}</strong>
@@ -370,11 +405,11 @@ export default function App() {
         </div>
       </aside>
 
-      <section className="main-content" id="overview">
+      <section className="main-content">
         <header className="topbar">
-          <div><p className="eyebrow">YOUR FINANCES</p><h1>Overview</h1></div>
+          <div><p className="eyebrow">{activePage === "administration" ? "ADMINISTRATION" : "YOUR FINANCES"}</p><h1>{activePage === "administration" ? "Administration" : "Overview"}</h1></div>
           <div className="topbar-actions">
-            {profile?.role === "admin" && <>
+            {activePage === "overview" && profile?.role === "admin" && <>
               <button className="secondary-button" onClick={() => void syncNow()} disabled={busy || !accounts.some((account) => !account.demo_data)}>
                 <RefreshCw size={16} className={busy ? "spin" : ""} /> Sync
               </button>
@@ -385,55 +420,59 @@ export default function App() {
           </div>
         </header>
 
-        {accounts.some((account) => account.demo_data) && (
-          <div className="alert demo-banner">Demo data — these fictional accounts and transactions are for local testing only.</div>
-        )}
         {error && <div className="alert error-message">{error}</div>}
         {notice && <div className="alert success-message">{notice}</div>}
 
-        <section className="panel settings-panel">
-          <div className="panel-heading"><div><h2>Dashboard preferences</h2><p>Choose which summary cards appear on your dashboard.</p></div></div>
-          <div className="preference-list">
-            {dashboardCards.map((card) => (
-              <label className="preference-option" key={card.id}>
-                <input
-                  type="checkbox"
-                  checked={!hiddenCards.includes(card.id)}
-                  onChange={(event) => void savePreferences(card.id, event.target.checked)}
-                />
-                {card.label}
-              </label>
-            ))}
-          </div>
-        </section>
-
-        {profile?.role === "admin" && (
-          <section className="panel settings-panel">
-            <div className="panel-heading"><div><h2>Household profiles</h2><p>Profiles share financial data; each person has their own dashboard and password.</p></div></div>
-            <div className="profile-list">
-              {profiles.map((item) => (
-                <div className="profile-row" key={item.id}>
-                  <strong>{item.username}</strong>
-                  <span>{item.role === "admin" ? "Administrator" : "Household user"}</span>
+        {activePage === "administration" ? (
+          <>
+            {profile?.role === "admin" && (
+              <section className="panel settings-panel">
+                <div className="panel-heading"><div><h2>Household profiles</h2><p>Profiles share financial data; each person has their own dashboard and password.</p></div></div>
+                <div className="profile-list">
+                  {profiles.map((item) => (
+                    <div className="profile-row" key={item.id}>
+                      <strong>{item.username}</strong>
+                      <span>{item.role === "admin" ? "Administrator" : "Household user"}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-            <form className="profile-form" onSubmit={createProfile}>
-              <label>New username<input autoComplete="off" minLength={3} maxLength={32} value={newUsername} onChange={(event) => setNewUsername(event.target.value)} required /></label>
-              <label>Temporary password<input type="password" autoComplete="new-password" minLength={12} maxLength={72} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required /></label>
-              <button className="primary-button" type="submit">Create household profile</button>
-            </form>
-          </section>
-        )}
+                <form className="profile-form" onSubmit={createProfile}>
+                  <label>New username<input autoComplete="off" minLength={3} maxLength={32} value={newUsername} onChange={(event) => setNewUsername(event.target.value)} required /></label>
+                  <label>Temporary password<input type="password" autoComplete="new-password" minLength={12} maxLength={72} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required /></label>
+                  <button className="primary-button" type="submit">Create household profile</button>
+                </form>
+              </section>
+            )}
 
-        <details className="panel password-panel">
-          <summary>Change my password</summary>
-          <form className="profile-form" onSubmit={changePassword}>
-            <label>Current password<input type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /></label>
-            <label>New password<input type="password" autoComplete="new-password" minLength={12} maxLength={72} value={replacementPassword} onChange={(event) => setReplacementPassword(event.target.value)} required /></label>
-            <button className="secondary-button" type="submit">Update password</button>
-          </form>
-        </details>
+            <details className="panel password-panel">
+              <summary>Change my password</summary>
+              <form className="profile-form" onSubmit={changePassword}>
+                <label>Current password<input type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /></label>
+                <label>New password<input type="password" autoComplete="new-password" minLength={12} maxLength={72} value={replacementPassword} onChange={(event) => setReplacementPassword(event.target.value)} required /></label>
+                <button className="secondary-button" type="submit">Update password</button>
+              </form>
+            </details>
+          </>
+        ) : (
+          <>
+            {accounts.some((account) => account.demo_data) && (
+              <div className="alert demo-banner">Demo data — these fictional accounts and transactions are for local testing only.</div>
+            )}
+            <section className="panel settings-panel">
+              <div className="panel-heading"><div><h2>Dashboard preferences</h2><p>Choose which summary cards appear on your dashboard.</p></div></div>
+              <div className="preference-list">
+                {dashboardCards.map((card) => (
+                  <label className="preference-option" key={card.id}>
+                    <input
+                      type="checkbox"
+                      checked={!hiddenCards.includes(card.id)}
+                      onChange={(event) => void savePreferences(card.id, event.target.checked)}
+                    />
+                    {card.label}
+                  </label>
+                ))}
+              </div>
+            </section>
 
         <div className="summary-grid">
           {!hiddenCards.includes("balance") && <article className="summary-card balance-card">
@@ -520,6 +559,8 @@ export default function App() {
             </div>
           )}
         </section>
+          </>
+        )}
         <footer>Snappy Finance · Self-hosted personal finance</footer>
       </section>
     </main>

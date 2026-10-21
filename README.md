@@ -36,7 +36,7 @@ To configure manually:
    docker compose up --build
    ```
 
-5. Open `http://localhost:8080` and sign in with the configured administrator username and password. The administrator can create a household profile for another person from the dashboard.
+5. Open `http://localhost:8080` and sign in with the configured administrator username and password. The administrator can create household profiles from the Administration page.
 
 The API is bound to loopback on port 8081 by default; the web container proxies `/api` to it. For Unraid, set `WEB_PORT` to the host port you want to publish. Keep the app private behind a VPN or a TLS-terminating reverse proxy; do not expose it directly to the internet over plain HTTP.
 
@@ -79,7 +79,7 @@ curl -fsSL https://raw.githubusercontent.com/shabarishk/snappy-finance/main/unra
 
 Then open **Docker → Add Container** and select the `snappy-finance` user template. The launch form includes the PostgreSQL host, port, database, username, password, first-run administrator username and password, session secret, encryption key, and optional Plaid settings. Unraid saves these settings in the user template and reuses them when the container is restarted or upgraded.
 
-On the first start against an empty database, the app creates the administrator profile from `ADMIN_USERNAME` and `ADMIN_PASSWORD` (at least 12 characters). The administrator can create regular household profiles in the app. Both profiles see the shared accounts and transactions; each controls their own dashboard summary cards and password. Only administrators can connect/sync Plaid or create profiles. The legacy `APP_PASSWORD` value is accepted as a bootstrap password fallback for existing deployments.
+On the first start against an empty database, the app creates the administrator profile from `ADMIN_USERNAME` and `ADMIN_PASSWORD` (at least 12 characters). The administrator can create regular household profiles from the Administration page. Both profiles see the shared accounts and transactions and control their own dashboard summary cards. Every profile can change its password from the Administration page. Only administrators can connect/sync Plaid or create profiles. The legacy `APP_PASSWORD` value is accepted as a bootstrap password fallback for existing deployments.
 
 Create the database and a PostgreSQL role for the app in your existing PostgreSQL container first. For a normal Unraid `bridge` network setup, set `PGHOST` to the Unraid server's LAN IP and `PGPORT` to the port that the PostgreSQL container publishes on the Unraid host. Do **not** use `localhost` or `127.0.0.1`; those addresses refer to the Snappy Finance container itself. If both containers share a user-defined Docker network, you can instead use the PostgreSQL container name and internal port.
 
