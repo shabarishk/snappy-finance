@@ -17,6 +17,7 @@ button, input { font: inherit; }
 button { cursor: pointer; }
 .app-shell { min-height: 100vh; }
 .sidebar { background: #fff; border-right: 1px solid var(--line); bottom: 0; display: flex; flex-direction: column; left: 0; padding: 28px 18px 20px; position: fixed; top: 0; width: 238px; }
+.menu-toggle, .sidebar-backdrop, .mobile-topbar { display: none; }
 .brand { align-items: center; display: flex; font-family: "Segoe UI", system-ui, sans-serif; font-size: 17px; font-weight: 800; gap: 10px; margin: 0 0 52px 7px; }
 .brand-light { color: #84918a; font-weight: 500; }
 .brand-mark { align-items: center; background: #e9f5ef; border-radius: 10px; color: var(--green); display: inline-flex; height: 36px; justify-content: center; width: 36px; }
@@ -121,20 +122,70 @@ footer { color: #9aa39e; font-size: 10px; padding: 6px 0 16px; }
   .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 720px) {
-  .sidebar { align-content: flex-start; border-bottom: 1px solid var(--line); border-right: 0; bottom: auto; flex-direction: row; flex-wrap: wrap; height: auto; left: 0; padding: 10px 16px; right: 0; width: 100%; }
-  .brand { flex: 0 0 100%; margin: 0 0 7px; }
-  .sidebar-nav { align-items: center; flex: 1; flex-direction: row; min-width: 0; overflow-x: auto; }
-  .nav-label { display: none; }
-  .sidebar-bottom { display: contents; }
-  .privacy-card, .profile-identity, .signout-button { display: none; }
-  .nav-item { flex: 0 0 auto; font-size: 11px; margin: 0 4px 0 0; padding: 8px; width: auto; }
-  .admin-nav-item { margin: 0; }
-  .main-content { margin-left: 0; padding: 112px 16px 20px; }
-  .topbar { align-items: flex-start; flex-direction: column; gap: 18px; }
+  .sidebar { align-content: stretch; border-bottom: 0; border-right: 1px solid var(--line); bottom: 0; flex-direction: column; flex-wrap: nowrap; height: 100vh; height: 100dvh; left: 0; overflow-y: auto; overscroll-behavior: contain; padding: 72px 18px 20px; right: auto; top: 0; transform: translateX(-102%); transition: transform .25s ease, visibility 0s linear .25s; visibility: hidden; width: min(280px, 86vw); z-index: 1002; }
+  .sidebar.sidebar-open { transform: translateX(0); transition: transform .25s ease; visibility: visible; }
+  .brand { flex: 0 0 auto; margin: 0 0 38px 7px; }
+  .sidebar-nav { align-items: stretch; flex: 0 0 auto; flex-direction: column; min-width: 0; overflow: visible; }
+  .nav-label { display: block; }
+  .sidebar-bottom { display: block; margin-top: auto; }
+  .privacy-card, .profile-identity, .signout-button { display: flex; }
+  .nav-item { flex: 0 0 auto; font-size: 13px; margin: 0 0 5px; padding: 11px 10px; width: 100%; }
+  .admin-nav-item { margin-bottom: 14px; }
+  .menu-toggle { align-items: center; background: white; border: 1px solid #dfe6e1; border-radius: 9px; color: #52615a; display: inline-flex; height: 44px; justify-content: center; left: 12px; padding: 0; position: fixed; top: 12px; width: 44px; z-index: 1000; }
+  .sidebar-backdrop { background: #172a2555; border: 0; display: block; inset: 0; opacity: 0; pointer-events: none; position: fixed; transition: opacity .25s ease, visibility 0s linear .25s; visibility: hidden; z-index: 1001; }
+  .sidebar-backdrop.visible { opacity: 1; pointer-events: auto; transition: opacity .25s ease; visibility: visible; }
+  .main-content { margin-left: 0; padding: 72px 16px 20px; }
+  .topbar { align-items: flex-start; flex-direction: column; gap: 13px; margin-bottom: 22px; }
+  .topbar h1 { font-size: 24px; }
   .summary-grid { gap: 9px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .summary-card { min-height: 126px; padding: 15px; }
+  .summary-card { min-height: 118px; padding: 14px; }
   .summary-value { font-size: 21px; }
   .topbar-actions { width: 100%; }
   .topbar-actions button { flex: 1; }
   .panel-heading, .account-list, .transaction-list { padding-left: 15px; padding-right: 15px; }
+}
+
+@media (max-width: 720px) and (orientation: portrait) {
+  .sidebar > .brand { display: none; }
+  .mobile-topbar { align-items: center; background: #fff; border-bottom: 1px solid var(--line); display: flex; height: 64px; justify-content: center; left: 0; position: fixed; right: 0; top: 0; z-index: 900; }
+  .mobile-topbar .brand { flex: 0 0 auto; margin: 0; }
+}
+
+@media (max-width: 600px) {
+  .account-row { column-gap: 10px; display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; padding: 12px 0; }
+  .account-icon { margin: 0; }
+  .account-info { min-width: 0; }
+  .account-info strong, .account-info span { overflow-wrap: anywhere; }
+  .account-balance { font-size: 11px; text-align: right; white-space: nowrap; }
+  .transaction-row { column-gap: 9px; display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; min-height: 72px; padding: 12px 0; row-gap: 4px; }
+  .transaction-icon { grid-column: 1; grid-row: 1 / span 2; margin: 0; }
+  .transaction-info { grid-column: 2; grid-row: 1 / span 2; min-width: 0; }
+  .transaction-info strong, .transaction-info span { overflow-wrap: anywhere; }
+  .transaction-row > strong { align-self: center; font-size: 11px; grid-column: 3; grid-row: 1; text-align: right; }
+  .visibility-button { grid-column: 3; grid-row: 2; justify-self: end; margin: 2px 0 0; }
+  .profile-form { align-items: stretch; flex-direction: column; }
+  .profile-form label { flex-basis: auto; }
+  .profile-form .primary-button, .profile-form .secondary-button { width: 100%; }
+  .profile-row { gap: 10px; }
+  .profile-row strong { overflow-wrap: anywhere; }
+}
+
+@media (max-width: 380px) {
+  .summary-grid { grid-template-columns: minmax(0, 1fr); }
+  .summary-card { min-height: auto; }
+  .summary-value { margin: 9px 0; }
+  .topbar-actions button { padding-left: 8px; padding-right: 8px; }
+  .panel-heading, .account-list, .transaction-list { padding-left: 12px; padding-right: 12px; }
+}
+
+@media (pointer: coarse) {
+  .nav-item, .primary-button, .secondary-button, .visibility-button, .signout-button { min-height: 44px; }
+  .menu-toggle { min-height: 44px; min-width: 44px; }
+  .profile-form input, .login-card input { min-height: 44px; }
+  .preference-option { min-height: 44px; padding: 4px 0; }
+  .password-panel summary { align-items: center; display: flex; min-height: 48px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar, .sidebar-backdrop { transition: none; }
 }

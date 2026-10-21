@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowDownLeft, ArrowUpRight, Banknote, Eye, EyeOff, Landmark, LockKeyhole, LogOut, RefreshCw, UsersRound, Wallet } from "lucide-react";
+import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, Banknote, Eye, EyeOff, Landmark, LockKeyhole, LogOut, Menu, RefreshCw, UsersRound, Wallet, X } from "lucide-react";
 
 type Profile = {
   id: string;
@@ -81,9 +81,12 @@ function money(value: number | null, currency: string | null = "USD") {
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [activePage, setActivePage] = useState<"overview" | "administration">(() =>
-    window.location.hash === "#administration" ? "administration" : "overview",
-  );
+  const [activePage, setActivePage] = useState<"overview" | "administration" | "transactions">(() => {
+    if (window.location.hash === "#administration") return "administration";
+    if (window.location.hash === "#transactions") return "transactions";
+    return "overview";
+  });
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [hiddenCards, setHiddenCards] = useState<string[]>([]);
@@ -101,14 +104,31 @@ export default function App() {
 
   useEffect(() => {
     const syncPageFromHash = () => {
-      setActivePage(window.location.hash === "#administration" ? "administration" : "overview");
+      if (window.location.hash === "#administration") setActivePage("administration");
+      else if (window.location.hash === "#transactions") setActivePage("transactions");
+      else setActivePage("overview");
     };
     window.addEventListener("hashchange", syncPageFromHash);
     return () => window.removeEventListener("hashchange", syncPageFromHash);
   }, []);
 
-  function navigateToPage(page: "overview" | "administration") {
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSidebarOpen(false);
+    };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [sidebarOpen]);
+
+  function navigateToPage(page: "overview" | "administration" | "transactions") {
     setActivePage(page);
+    setSidebarOpen(false);
     if (window.location.hash !== `#${page}`) window.location.hash = page;
   }
 
@@ -169,6 +189,11 @@ export default function App() {
     if (otherAccounts.length > 0) groups.push({ label: "Other accounts", accounts: otherAccounts });
     return groups;
   }, [accounts]);
+
+  const pageTitle = activePage === "administration"
+    ? "Administration"
+    : activePage === "transactions" ? "Transactions" : "Overview";
+  const pageEyebrow = activePage === "administration" ? "ADMINISTRATION" : "YOUR FINANCES";
 
   async function signIn(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -232,6 +257,37 @@ export default function App() {
       setError(err instanceof Error ? err.message : "Could not update transaction visibility");
     }
   }
+
+  const transactionsPanel = (
+    <section className="panel" id="transactions">
+      <div className="panel-heading"><div><h2>Recent transactions</h2><p>Your latest activity across accounts</p></div></div>
+      {loading ? <div className="empty-state">Loading transactions…</div> : transactions.length === 0 ? (
+        <div className="empty-state compact">Transactions will appear here after your first account sync.</div>
+      ) : (
+        <div className="transaction-list">
+          {transactions.map((item) => (
+            <div className={`transaction-row ${item.hidden_from_users ? "hidden-transaction" : ""}`} key={item.transaction_id}>
+              <span className={`transaction-icon ${item.amount < 0 ? "income-icon" : ""}`}>{item.amount < 0 ? <ArrowDownLeft size={17} /> : <ArrowUpRight size={17} />}</span>
+              <div className="transaction-info"><strong>{item.merchant_name || item.name}</strong><span>{item.category_detailed || item.category_primary || "Uncategorized"} · {new Date(`${item.date}T12:00:00`).toLocaleDateString()}</span></div>
+              <strong className={item.amount < 0 ? "positive-text" : ""}>{item.amount < 0 ? "+" : "−"}{money(Math.abs(item.amount), item.iso_currency_code)}{item.pending && <small className="pending"> Pending</small>}</strong>
+              {profile?.role === "admin" && (
+                <button
+                  type="button"
+                  className="visibility-button"
+                  onClick={() => void setTransactionVisibility(item)}
+                  aria-label={item.hidden_from_users ? "Show transaction to household users" : "Hide transaction from household users"}
+                  title={item.hidden_from_users ? "Show to household users" : "Hide from household users"}
+                >
+                  {item.hidden_from_users ? <Eye size={15} /> : <EyeOff size={15} />}
+                  <span>{item.hidden_from_users ? "Show" : "Hide"}</span>
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
 
   async function createProfile(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -372,7 +428,7 @@ export default function App() {
 
   return (
     <main className="app-shell">
-      <aside className="sidebar">
+      <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`} id="app-sidebar">
         <div className="brand"><span className="brand-mark"><Wallet size={19} /></span><span>snappy<span className="brand-light">finance</span></span></div>
         <nav className="sidebar-nav" aria-label="Workspace">
           <div className="nav-label">WORKSPACE</div>
@@ -382,13 +438,10 @@ export default function App() {
             aria-current={activePage === "overview" ? "page" : undefined}
           ><Banknote size={18} /> Overview</button>
           <button
-            className="nav-item"
-            onClick={() => {
-              setActivePage("overview");
-              if (window.location.hash !== "#accounts") window.location.hash = "accounts";
-              window.requestAnimationFrame(() => document.getElementById("accounts")?.scrollIntoView({ behavior: "smooth" }));
-            }}
-          ><Landmark size={18} /> Accounts</button>
+            className={`nav-item ${activePage === "transactions" ? "active" : ""}`}
+            onClick={() => navigateToPage("transactions")}
+            aria-current={activePage === "transactions" ? "page" : undefined}
+          ><ArrowLeftRight size={18} /> Transactions</button>
         </nav>
         <div className="sidebar-bottom">
           <button
@@ -404,10 +457,29 @@ export default function App() {
           <button className="signout-button" onClick={() => void signOut()}><LogOut size={16} /> Sign out</button>
         </div>
       </aside>
+      <div className="mobile-topbar" aria-hidden="true">
+        <div className="brand"><span className="brand-mark"><Wallet size={19} /></span><span>snappy<span className="brand-light">finance</span></span></div>
+      </div>
+      <button
+        type="button"
+        className="menu-toggle"
+        aria-label={sidebarOpen ? "Close navigation menu" : "Open navigation menu"}
+        aria-expanded={sidebarOpen}
+        aria-controls="app-sidebar"
+        onClick={() => setSidebarOpen((open) => !open)}
+      >{sidebarOpen ? <X size={20} /> : <Menu size={20} />}</button>
+      <button
+        type="button"
+        className={`sidebar-backdrop ${sidebarOpen ? "visible" : ""}`}
+        aria-label="Close navigation menu"
+        aria-hidden={!sidebarOpen}
+        tabIndex={sidebarOpen ? 0 : -1}
+        onClick={() => setSidebarOpen(false)}
+      />
 
       <section className="main-content">
         <header className="topbar">
-          <div><p className="eyebrow">{activePage === "administration" ? "ADMINISTRATION" : "YOUR FINANCES"}</p><h1>{activePage === "administration" ? "Administration" : "Overview"}</h1></div>
+          <div><p className="eyebrow">{pageEyebrow}</p><h1>{pageTitle}</h1></div>
           <div className="topbar-actions">
             {activePage === "overview" && profile?.role === "admin" && <>
               <button className="secondary-button" onClick={() => void syncNow()} disabled={busy || !accounts.some((account) => !account.demo_data)}>
@@ -452,6 +524,13 @@ export default function App() {
                 <button className="secondary-button" type="submit">Update password</button>
               </form>
             </details>
+          </>
+        ) : activePage === "transactions" ? (
+          <>
+            {accounts.some((account) => account.demo_data) && (
+              <div className="alert demo-banner">Demo data — these fictional accounts and transactions are for local testing only.</div>
+            )}
+            {transactionsPanel}
           </>
         ) : (
           <>
@@ -531,34 +610,6 @@ export default function App() {
           )}
         </section>
 
-        <section className="panel">
-          <div className="panel-heading"><div><h2>Recent transactions</h2><p>Your latest activity across accounts</p></div></div>
-          {loading ? <div className="empty-state">Loading transactions…</div> : transactions.length === 0 ? (
-            <div className="empty-state compact">Transactions will appear here after your first account sync.</div>
-          ) : (
-            <div className="transaction-list">
-              {transactions.map((item) => (
-                <div className={`transaction-row ${item.hidden_from_users ? "hidden-transaction" : ""}`} key={item.transaction_id}>
-                  <span className={`transaction-icon ${item.amount < 0 ? "income-icon" : ""}`}>{item.amount < 0 ? <ArrowDownLeft size={17} /> : <ArrowUpRight size={17} />}</span>
-                  <div className="transaction-info"><strong>{item.merchant_name || item.name}</strong><span>{item.category_detailed || item.category_primary || "Uncategorized"} · {new Date(`${item.date}T12:00:00`).toLocaleDateString()}</span></div>
-                  <strong className={item.amount < 0 ? "positive-text" : ""}>{item.amount < 0 ? "+" : "−"}{money(Math.abs(item.amount), item.iso_currency_code)}{item.pending && <small className="pending"> Pending</small>}</strong>
-                  {profile?.role === "admin" && (
-                    <button
-                      type="button"
-                      className="visibility-button"
-                      onClick={() => void setTransactionVisibility(item)}
-                      aria-label={item.hidden_from_users ? "Show transaction to household users" : "Hide transaction from household users"}
-                      title={item.hidden_from_users ? "Show to household users" : "Hide from household users"}
-                    >
-                      {item.hidden_from_users ? <Eye size={15} /> : <EyeOff size={15} />}
-                      <span>{item.hidden_from_users ? "Show" : "Hide"}</span>
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
           </>
         )}
         <footer>Snappy Finance · Self-hosted personal finance</footer>

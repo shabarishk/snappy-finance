@@ -11,7 +11,7 @@ A self-hosted personal finance app scaffold using Go, React, PostgreSQL, and Pla
 - AES-GCM encryption of stored Plaid access tokens.
 - Cursor-based Plaid Transactions Sync with added, modified, and removed transaction handling.
 - Periodic sync worker and a manual sync action.
-- React dashboard for linked accounts and recent transactions.
+- React dashboard for linked accounts and a separate transactions page.
 - Docker Compose deployment with PostgreSQL data persisted in a named volume.
 
 ## Run locally with Docker
