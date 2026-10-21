@@ -9,7 +9,7 @@ type Profile = {
 
 const dashboardCards = [
   { id: "income", label: "Income summary" },
-  { id: "balance", label: "Total account balance" },
+  { id: "balance", label: "Total cash account balance" },
   { id: "spending", label: "Spending this month" },
   { id: "net", label: "Monthly net" },
 ];
@@ -131,6 +131,8 @@ export default function App() {
   const [incomeDisplay, setIncomeDisplay] = useState<"expendable" | "total">("expendable");
   const [statisticsPeriod, setStatisticsPeriod] = useState<"spend" | "calendar">("spend");
   const [transactionTab, setTransactionTab] = useState<TransactionTabID>("depository");
+  const [transactionPage, setTransactionPage] = useState(1);
+  const [transactionPageSize, setTransactionPageSize] = useState(25);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -251,6 +253,11 @@ export default function App() {
     if (otherAccounts.length > 0) groups.push({ label: "Other accounts", accounts: otherAccounts });
     return groups;
   }, [accounts]);
+  const cashAccounts = useMemo(
+    () => accounts.filter((account) => account.type.toLowerCase() === "depository"),
+    [accounts],
+  );
+  const totalCashBalance = cashAccounts.reduce((sum, account) => sum + (account.current_balance ?? 0), 0);
 
   const transactionTabs = useMemo(() => {
     const accountTypes = new Map(accounts.map((account) => [account.account_id, account.type.toLowerCase()]));
@@ -276,6 +283,16 @@ export default function App() {
         : type === activeTransactionTab;
     });
   }, [accounts, activeTransactionTab, transactions]);
+  const transactionPageCount = Math.max(1, Math.ceil(visibleTransactions.length / transactionPageSize));
+  const currentTransactionPage = Math.min(transactionPage, transactionPageCount);
+  const pageTransactions = useMemo(() => {
+    const start = (currentTransactionPage - 1) * transactionPageSize;
+    return visibleTransactions.slice(start, start + transactionPageSize);
+  }, [currentTransactionPage, transactionPageSize, visibleTransactions]);
+  const firstTransactionNumber = visibleTransactions.length === 0
+    ? 0
+    : (currentTransactionPage - 1) * transactionPageSize + 1;
+  const lastTransactionNumber = Math.min(currentTransactionPage * transactionPageSize, visibleTransactions.length);
 
   const pageTitle = activePage === "administration"
     ? "Administration"
@@ -369,7 +386,8 @@ export default function App() {
         setNotice("Using the bank category for this transaction. Similar transactions remain categorized automatically.");
       } else if (result.matching_rule_applied) {
         const count = result.matched_transaction_ids.length;
-        setNotice(`Applied ${label ?? "Other"} to ${count} matching transaction${count === 1 ? "" : "s"}. Future matches will use this category.`);
+        const matchScope = item.amount < 0 ? " in this account" : "";
+        setNotice(`Applied ${label ?? "Other"} to ${count} matching transaction${count === 1 ? "" : "s"}. Future matches${matchScope} will use this category.`);
       } else {
         setNotice(`Categorized this transaction as ${label ?? "Other"}, but no stable description was available to categorize similar transactions.`);
       }
@@ -403,59 +421,99 @@ export default function App() {
   const transactionsPanel = (
     <section className="panel" id="transactions">
       <div className="panel-heading"><div><h2>Recent transactions</h2><p>{profile?.role === "admin" ? "Categories apply to similar past and future transactions; manage exclusions in Administration." : "Your latest activity across accounts"}</p></div></div>
-      <div className="transaction-tabs" role="group" aria-label="Filter transactions by account type">
-        {transactionTabs.map((tab) => (
-          <button
-            type="button"
-            key={tab.id}
-            className={`transaction-tab ${activeTransactionTab === tab.id ? "active" : ""}`}
-            aria-pressed={activeTransactionTab === tab.id}
-            onClick={() => setTransactionTab(tab.id)}
-          >{tab.label}</button>
-        ))}
-      </div>
-      {loading ? <div className="empty-state">Loading transactions…</div> : visibleTransactions.length === 0 ? (
-        <div className="empty-state compact">
-          {transactions.length === 0
-            ? "Transactions will appear here after your first account sync."
-            : `No transactions for ${transactionTabs.find((tab) => tab.id === activeTransactionTab)?.label.toLowerCase() ?? "this account type"} yet.`}
-        </div>
-      ) : (
-        <div className="transaction-list">
-          {visibleTransactions.map((item) => (
-            <div className={`transaction-row ${item.hidden_from_users ? "hidden-transaction" : ""}`} key={item.transaction_id}>
-              <span className={`transaction-icon ${item.amount < 0 ? "income-icon" : ""}`}>{item.amount < 0 ? <ArrowDownLeft size={17} /> : <ArrowUpRight size={17} />}</span>
-              <div className="transaction-info"><strong>{item.merchant_name || item.name}</strong><span>{transactionCategories.find((category) => category.category_id === item.category_id)?.label || item.category_detailed || item.category_primary || "Uncategorized"} · {new Date(`${item.date}T12:00:00`).toLocaleDateString()}</span></div>
-              <strong className={item.amount < 0 ? "positive-text" : ""}>{item.amount < 0 ? "+" : "−"}{money(Math.abs(item.amount), item.iso_currency_code)}{item.pending && <small className="pending"> Pending</small>}</strong>
-              {profile?.role === "admin" && (
-                <div className="transaction-actions">
-                  <select
-                    className="category-select"
-                    value={item.category_id ?? ""}
-                    aria-label={`Category for ${item.merchant_name || item.name}`}
-                    onChange={(event) => void setTransactionCategory(item, event.target.value)}
-                  >
-                    <option value="">Bank category</option>
-                    {transactionCategories.filter((category) => category.category_type === (item.amount < 0 ? "income" : "expense")).map((category) => (
-                      <option key={category.category_id} value={category.category_id}>{category.label}</option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    className="visibility-button"
-                    onClick={() => void setTransactionVisibility(item)}
-                    aria-label={item.hidden_from_users ? "Show transaction to household users" : "Hide transaction from household users"}
-                    title={item.hidden_from_users ? "Show to household users" : "Hide from household users"}
-                  >
-                    {item.hidden_from_users ? <Eye size={15} /> : <EyeOff size={15} />}
-                    <span>{item.hidden_from_users ? "Show" : "Hide"}</span>
-                  </button>
-                </div>
-              )}
-            </div>
+      <div className="transactions-layout">
+        <div className="transaction-tabs" role="group" aria-label="Filter transactions by account type">
+          {transactionTabs.map((tab) => (
+            <button
+              type="button"
+              key={tab.id}
+              className={`transaction-tab ${activeTransactionTab === tab.id ? "active" : ""}`}
+              aria-pressed={activeTransactionTab === tab.id}
+              onClick={() => {
+                setTransactionTab(tab.id);
+                setTransactionPage(1);
+              }}
+            >{tab.label}</button>
           ))}
         </div>
-      )}
+        <div className="transactions-content">
+          <div className="transaction-list-toolbar">
+            <span>Showing {firstTransactionNumber}–{lastTransactionNumber} of {visibleTransactions.length}</span>
+            <label className="page-size-control">
+              Items per page
+              <select
+                value={transactionPageSize}
+                onChange={(event) => {
+                  setTransactionPageSize(Number(event.target.value));
+                  setTransactionPage(1);
+                }}
+                aria-label="Transactions per page"
+              >
+                {[25, 50, 75, 100].map((pageSize) => (
+                  <option key={pageSize} value={pageSize}>{pageSize}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {loading ? <div className="empty-state">Loading transactions…</div> : visibleTransactions.length === 0 ? (
+            <div className="empty-state compact">
+              {transactions.length === 0
+                ? "Transactions will appear here after your first account sync."
+                : `No transactions for ${transactionTabs.find((tab) => tab.id === activeTransactionTab)?.label.toLowerCase() ?? "this account type"} yet.`}
+            </div>
+          ) : (
+            <div className="transaction-list">
+              {pageTransactions.map((item) => (
+                <div className={`transaction-row ${item.hidden_from_users ? "hidden-transaction" : ""}`} key={item.transaction_id}>
+                  <span className={`transaction-icon ${item.amount < 0 ? "income-icon" : ""}`}>{item.amount < 0 ? <ArrowDownLeft size={17} /> : <ArrowUpRight size={17} />}</span>
+                  <div className="transaction-info"><strong>{item.merchant_name || item.name}</strong><span>{transactionCategories.find((category) => category.category_id === item.category_id)?.label || item.category_detailed || item.category_primary || "Uncategorized"} · {new Date(`${item.date}T12:00:00`).toLocaleDateString()}</span></div>
+                  <strong className={item.amount < 0 ? "positive-text" : ""}>{item.amount < 0 ? "+" : "−"}{money(Math.abs(item.amount), item.iso_currency_code)}{item.pending && <small className="pending"> Pending</small>}</strong>
+                  {profile?.role === "admin" && (
+                    <div className="transaction-actions">
+                      <select
+                        className="category-select"
+                        value={item.category_id ?? ""}
+                        aria-label={`Category for ${item.merchant_name || item.name}`}
+                        onChange={(event) => void setTransactionCategory(item, event.target.value)}
+                      >
+                        <option value="">Bank category</option>
+                        {transactionCategories.filter((category) => category.category_type === (item.amount < 0 ? "income" : "expense")).map((category) => (
+                          <option key={category.category_id} value={category.category_id}>{category.label}</option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="visibility-button"
+                        onClick={() => void setTransactionVisibility(item)}
+                        aria-label={item.hidden_from_users ? "Show transaction to household users" : "Hide transaction from household users"}
+                        title={item.hidden_from_users ? "Show to household users" : "Hide from household users"}
+                      >
+                        {item.hidden_from_users ? <Eye size={15} /> : <EyeOff size={15} />}
+                        <span>{item.hidden_from_users ? "Show" : "Hide"}</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          <nav className="transaction-pagination" aria-label="Transaction pages">
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={currentTransactionPage <= 1}
+              onClick={() => setTransactionPage(currentTransactionPage - 1)}
+            >Previous</button>
+            <span>Page {currentTransactionPage} of {transactionPageCount}</span>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={currentTransactionPage >= transactionPageCount}
+              onClick={() => setTransactionPage(currentTransactionPage + 1)}
+            >Next</button>
+          </nav>
+        </div>
+      </div>
     </section>
   );
 
@@ -806,11 +864,11 @@ export default function App() {
             <div className="summary-foot positive"><ArrowDownLeft size={15} /> {incomeDisplay === "expendable" ? "Expendable inflows" : "All income inflows"}</div>
           </article>}
           {!hiddenCards.includes("balance") && <article className="summary-card balance-card">
-            <div className="summary-label">TOTAL ACCOUNT BALANCE</div>
+            <div className="summary-label">TOTAL CASH ACCOUNT BALANCE</div>
             <div className="summary-value">
-              {money(accounts.reduce((sum, account) => sum + (account.current_balance ?? 0), 0))}
+              {money(totalCashBalance)}
             </div>
-            <div className="summary-foot"><Wallet size={15} /> Across {accounts.length} connected account{accounts.length === 1 ? "" : "s"}</div>
+            <div className="summary-foot"><Wallet size={15} /> Across {cashAccounts.length} cash account{cashAccounts.length === 1 ? "" : "s"}</div>
           </article>}
           {!hiddenCards.includes("spending") && <article className="summary-card">
             <div className="summary-label">SPENDING {currentPeriodLabel}</div>

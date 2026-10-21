@@ -54,6 +54,7 @@ INSERT INTO transaction_categories (category_id, label, category_type) VALUES
     ('credit_card_payment', 'Credit card payment', 'expense'),
     ('mortgage_payment', 'Mortgage payment', 'expense'),
     ('utility_payment', 'Utility payment', 'expense'),
+    ('transfer_expense', 'Transfer', 'expense'),
     ('grocery', 'Grocery', 'expense'),
     ('restaurants', 'Restaurants', 'expense'),
     ('food_delivery', 'Food delivery', 'expense'),
@@ -68,18 +69,38 @@ INSERT INTO transaction_categories (category_id, label, category_type) VALUES
     ('expendable_income', 'Expendable income', 'income')
 ON CONFLICT (category_id) DO NOTHING;
 
-CREATE OR REPLACE FUNCTION transaction_category_match_key(merchant_name TEXT, transaction_name TEXT)
+DROP FUNCTION IF EXISTS transaction_category_match_key(TEXT, TEXT);
+
+CREATE OR REPLACE FUNCTION transaction_category_match_key(
+    p_merchant_name TEXT,
+    p_transaction_name TEXT,
+    p_account_id TEXT,
+    p_is_income BOOLEAN
+)
 RETURNS TEXT
 LANGUAGE SQL
 IMMUTABLE
 AS $$
-    SELECT array_to_string(
-        (regexp_split_to_array(
-            btrim(regexp_replace(lower(COALESCE(NULLIF(btrim(merchant_name), ''), transaction_name)), '[^[:alnum:]]+', ' ', 'g')),
+    WITH source AS (
+        SELECT CASE
+            WHEN p_is_income THEN COALESCE(p_transaction_name, '')
+            ELSE COALESCE(NULLIF(btrim(p_merchant_name), ''), p_transaction_name, '')
+        END AS raw_name
+    ), normalized AS (
+        SELECT array_to_string(
+            (regexp_split_to_array(
+                btrim(regexp_replace(lower(raw_name), '[^[:alnum:]]+', ' ', 'g')),
+                ' '
+            ))[1:3],
             ' '
-        ))[1:3],
-        ' '
-    );
+        ) AS name_key
+        FROM source
+    )
+    SELECT CASE
+        WHEN p_is_income THEN COALESCE(p_account_id, '') || '|' || name_key
+        ELSE name_key
+    END
+    FROM normalized;
 $$;
 
 CREATE TABLE IF NOT EXISTS transactions (
@@ -113,10 +134,6 @@ WHERE t.category_id = c.category_id
   AND c.category_type = 'expense'
   AND t.amount < 0;
 
-UPDATE transactions
-SET category_match_key = transaction_category_match_key(merchant_name, name)
-WHERE category_match_key = '';
-
 CREATE TABLE IF NOT EXISTS transaction_category_rules (
     category_type TEXT NOT NULL,
     match_key TEXT NOT NULL,
@@ -124,6 +141,27 @@ CREATE TABLE IF NOT EXISTS transaction_category_rules (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (category_type, match_key)
 );
+
+INSERT INTO transaction_category_rules (category_type, match_key, category_id)
+SELECT DISTINCT ON (transaction_category_match_key(t.merchant_name, t.name, t.account_id, TRUE))
+    'income',
+    transaction_category_match_key(t.merchant_name, t.name, t.account_id, TRUE),
+    r.category_id
+FROM transaction_category_rules r
+JOIN transactions t ON t.category_match_key = r.match_key AND t.amount < 0
+WHERE r.category_type = 'income'
+  AND r.match_key NOT LIKE '%|%'
+ORDER BY transaction_category_match_key(t.merchant_name, t.name, t.account_id, TRUE),
+         t.transaction_date DESC, t.updated_at DESC
+ON CONFLICT (category_type, match_key) DO NOTHING;
+
+UPDATE transactions
+SET category_match_key = transaction_category_match_key(merchant_name, name, account_id, amount < 0)
+WHERE category_match_key IS DISTINCT FROM transaction_category_match_key(merchant_name, name, account_id, amount < 0);
+
+DELETE FROM transaction_category_rules
+WHERE category_type = 'income'
+  AND match_key NOT LIKE '%|%';
 
 INSERT INTO transaction_category_rules (category_type, match_key, category_id)
 SELECT DISTINCT ON (c.category_type, t.category_match_key)
