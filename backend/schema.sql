@@ -41,6 +41,47 @@ CREATE TABLE IF NOT EXISTS accounts (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS transaction_categories (
+    category_id TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    category_type TEXT NOT NULL DEFAULT 'expense',
+    excluded_from_totals BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+ALTER TABLE transaction_categories ADD COLUMN IF NOT EXISTS category_type TEXT NOT NULL DEFAULT 'expense';
+
+INSERT INTO transaction_categories (category_id, label, category_type) VALUES
+    ('credit_card_payment', 'Credit card payment', 'expense'),
+    ('mortgage_payment', 'Mortgage payment', 'expense'),
+    ('utility_payment', 'Utility payment', 'expense'),
+    ('grocery', 'Grocery', 'expense'),
+    ('restaurants', 'Restaurants', 'expense'),
+    ('food_delivery', 'Food delivery', 'expense'),
+    ('recreation_activities', 'Recreation & Activities', 'expense'),
+    ('shopping', 'Shopping', 'expense'),
+    ('streaming', 'Streaming', 'expense'),
+    ('home_maintenance', 'Home maintenance', 'expense'),
+    ('other', 'Other', 'expense'),
+    ('income', 'Income', 'income'),
+    ('transfer', 'Transfer', 'income'),
+    ('other_income', 'Other', 'income'),
+    ('expendable_income', 'Expendable income', 'income')
+ON CONFLICT (category_id) DO NOTHING;
+
+CREATE OR REPLACE FUNCTION transaction_category_match_key(merchant_name TEXT, transaction_name TEXT)
+RETURNS TEXT
+LANGUAGE SQL
+IMMUTABLE
+AS $$
+    SELECT array_to_string(
+        (regexp_split_to_array(
+            btrim(regexp_replace(lower(COALESCE(NULLIF(btrim(merchant_name), ''), transaction_name)), '[^[:alnum:]]+', ' ', 'g')),
+            ' '
+        ))[1:3],
+        ' '
+    );
+$$;
+
 CREATE TABLE IF NOT EXISTS transactions (
     transaction_id TEXT PRIMARY KEY,
     item_id TEXT NOT NULL REFERENCES plaid_items(item_id) ON DELETE CASCADE,
@@ -53,11 +94,56 @@ CREATE TABLE IF NOT EXISTS transactions (
     category_primary TEXT,
     category_detailed TEXT,
     iso_currency_code TEXT,
+    category_id TEXT REFERENCES transaction_categories(category_id),
+    category_match_key TEXT NOT NULL DEFAULT '',
+    category_rule_exempt BOOLEAN NOT NULL DEFAULT FALSE,
     hidden_from_users BOOLEAN NOT NULL DEFAULT FALSE,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS category_id TEXT REFERENCES transaction_categories(category_id);
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS category_match_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS category_rule_exempt BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS hidden_from_users BOOLEAN NOT NULL DEFAULT FALSE;
+
+UPDATE transactions t
+SET category_id = 'other_income'
+FROM transaction_categories c
+WHERE t.category_id = c.category_id
+  AND c.category_type = 'expense'
+  AND t.amount < 0;
+
+UPDATE transactions
+SET category_match_key = transaction_category_match_key(merchant_name, name)
+WHERE category_match_key = '';
+
+CREATE TABLE IF NOT EXISTS transaction_category_rules (
+    category_type TEXT NOT NULL,
+    match_key TEXT NOT NULL,
+    category_id TEXT NOT NULL REFERENCES transaction_categories(category_id),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (category_type, match_key)
+);
+
+INSERT INTO transaction_category_rules (category_type, match_key, category_id)
+SELECT DISTINCT ON (c.category_type, t.category_match_key)
+    c.category_type, t.category_match_key, t.category_id
+FROM transactions t
+JOIN transaction_categories c ON c.category_id = t.category_id
+WHERE t.category_match_key <> ''
+  AND c.category_type = CASE WHEN t.amount < 0 THEN 'income' ELSE 'expense' END
+ORDER BY c.category_type, t.category_match_key, t.transaction_date DESC, t.updated_at DESC
+ON CONFLICT (category_type, match_key) DO NOTHING;
+
+UPDATE transactions t
+SET category_id = r.category_id
+FROM transaction_category_rules r
+WHERE t.category_match_key = r.match_key
+  AND r.category_type = CASE WHEN t.amount < 0 THEN 'income' ELSE 'expense' END
+  AND t.category_rule_exempt = FALSE
+  AND t.category_id IS DISTINCT FROM r.category_id;
 
 CREATE INDEX IF NOT EXISTS transactions_date_idx ON transactions (transaction_date DESC);
 CREATE INDEX IF NOT EXISTS transactions_account_date_idx ON transactions (account_id, transaction_date DESC);
+CREATE INDEX IF NOT EXISTS transactions_category_idx ON transactions (category_id);
+CREATE INDEX IF NOT EXISTS transactions_category_match_key_idx ON transactions (category_match_key);

@@ -49,6 +49,10 @@ button { cursor: pointer; }
 .summary-card, .panel { background: white; border: 1px solid var(--line); border-radius: 11px; }
 .summary-card { min-height: 138px; padding: 19px 20px; }
 .balance-card { background: #f0f8f3; border-color: #e6f0e8; }
+.income-card { background: #f0f8f3; border-color: #e6f0e8; }
+.income-summary-heading { align-items: center; display: flex; flex-wrap: wrap; gap: 6px; justify-content: space-between; }
+.summary-toggle { background: white; border: 1px solid #dfe6e1; border-radius: 6px; color: var(--green-dark); font-size: 9px; font-weight: 600; line-height: 1.2; padding: 6px 8px; }
+.summary-toggle:hover { background: #f9fbf9; }
 .summary-label { color: #84918a; font-size: 9px; font-weight: 700; letter-spacing: .09em; }
 .summary-value { font-family: "Segoe UI", system-ui, sans-serif; font-size: 25px; font-weight: 700; letter-spacing: -.04em; margin: 13px 0 12px; }
 .summary-foot { align-items: center; color: #87938d; display: flex; font-size: 10px; gap: 6px; }
@@ -57,6 +61,13 @@ button { cursor: pointer; }
 .panel { margin-bottom: 18px; overflow: hidden; }
 .panel-heading { align-items: center; border-bottom: 1px solid #eff1ef; display: flex; justify-content: space-between; padding: 19px 22px; }
 .settings-panel { margin-bottom: 16px; }
+.admin-tabs { border-bottom: 1px solid var(--line); display: flex; gap: 8px; margin-bottom: 18px; }
+.admin-tab { background: none; border: 0; border-bottom: 2px solid transparent; color: #74817a; flex: 1 1 0; font-size: 12px; font-weight: 600; min-height: 44px; padding: 0 12px; }
+.admin-tab.active { border-bottom-color: var(--green); color: var(--green-dark); }
+.admin-tab:focus-visible { outline: 2px solid #78b89b; outline-offset: -2px; }
+.category-exclusion-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.category-exclusion-group + .category-exclusion-group { border-left: 1px solid var(--line); }
+.category-exclusion-group h3 { color: #52615a; font-size: 11px; margin: 0; padding: 16px 21px 0; }
 .preference-list { display: flex; flex-wrap: wrap; gap: 10px 22px; padding: 17px 21px; }
 .preference-option { align-items: center; color: #52615a; display: flex; font-size: 11px; gap: 8px; }
 .preference-option input { accent-color: var(--green); }
@@ -90,6 +101,9 @@ button { cursor: pointer; }
 .hidden-transaction .transaction-info strong { color: #84918a; }
 .visibility-button { align-items: center; background: white; border: 1px solid #dfe6e1; border-radius: 7px; color: #52615a; display: inline-flex; flex: 0 0 auto; font-size: 10px; gap: 5px; margin-left: 12px; padding: 7px 9px; }
 .visibility-button:hover { background: #f9fbf9; }
+.transaction-actions { align-items: center; display: flex; flex: 0 0 auto; gap: 7px; margin-left: 12px; }
+.transaction-actions .visibility-button { margin-left: 0; }
+.category-select { background: #fff; border: 1px solid #dfe6e1; border-radius: 7px; color: #52615a; font-size: 10px; height: 36px; max-width: 165px; min-width: 0; padding: 0 8px; }
 .pending { color: #a8864a; font-size: 9px; font-weight: 500; }
 .empty-state { align-items: center; color: var(--muted); display: flex; flex-direction: column; font-size: 11px; gap: 10px; justify-content: center; min-height: 190px; padding: 25px; text-align: center; }
 .empty-state strong { color: #3b4a43; font-size: 13px; }
@@ -151,7 +165,9 @@ footer { color: #9aa39e; font-size: 10px; padding: 6px 0 16px; }
   .mobile-topbar .brand { flex: 0 0 auto; margin: 0; }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 900px) {
+  .category-exclusion-groups { grid-template-columns: 1fr; }
+  .category-exclusion-group + .category-exclusion-group { border-left: 0; border-top: 1px solid var(--line); }
   .account-row { column-gap: 10px; display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; padding: 12px 0; }
   .account-icon { margin: 0; }
   .account-info { min-width: 0; }
@@ -162,12 +178,26 @@ footer { color: #9aa39e; font-size: 10px; padding: 6px 0 16px; }
   .transaction-info { grid-column: 2; grid-row: 1 / span 2; min-width: 0; }
   .transaction-info strong, .transaction-info span { overflow-wrap: anywhere; }
   .transaction-row > strong { align-self: center; font-size: 11px; grid-column: 3; grid-row: 1; text-align: right; }
-  .visibility-button { grid-column: 3; grid-row: 2; justify-self: end; margin: 2px 0 0; }
+  .transaction-actions { grid-column: 2 / 4; grid-row: 3; justify-content: flex-end; margin: 2px 0 0; min-width: 0; }
+  .category-select { flex: 1 1 auto; }
   .profile-form { align-items: stretch; flex-direction: column; }
   .profile-form label { flex-basis: auto; }
   .profile-form .primary-button, .profile-form .secondary-button { width: 100%; }
   .profile-row { gap: 10px; }
   .profile-row strong { overflow-wrap: anywhere; }
+}
+
+@media (orientation: landscape) {
+  .transaction-actions { display: grid; flex: 0 0 clamp(190px, 28vw, 230px); grid-template-columns: minmax(0, 1fr) 72px; margin-left: 12px; order: 1; width: clamp(190px, 28vw, 230px); }
+  .transaction-actions .visibility-button { justify-content: center; margin: 0; width: 72px; }
+  .category-select { max-width: none; width: 100%; }
+  .transaction-row > strong { flex: 0 0 clamp(92px, 15vw, 125px); margin-left: 14px; order: 2; text-align: right; }
+}
+
+@media (orientation: landscape) and (max-width: 900px) {
+  .transaction-row { display: flex; }
+  .transaction-icon, .transaction-info, .transaction-row > strong, .transaction-actions { grid-column: auto; grid-row: auto; }
+  .transaction-actions { margin: 0 0 0 12px; }
 }
 
 @media (max-width: 380px) {
@@ -179,7 +209,7 @@ footer { color: #9aa39e; font-size: 10px; padding: 6px 0 16px; }
 }
 
 @media (pointer: coarse) {
-  .nav-item, .primary-button, .secondary-button, .visibility-button, .signout-button { min-height: 44px; }
+  .nav-item, .primary-button, .secondary-button, .visibility-button, .signout-button, .category-select, .summary-toggle { min-height: 44px; }
   .menu-toggle { min-height: 44px; min-width: 44px; }
   .profile-form input, .login-card input { min-height: 44px; }
   .preference-option { min-height: 44px; padding: 4px 0; }

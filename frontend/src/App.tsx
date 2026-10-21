@@ -8,8 +8,8 @@ type Profile = {
 };
 
 const dashboardCards = [
+  { id: "income", label: "Income summary" },
   { id: "balance", label: "Total account balance" },
-  { id: "income", label: "Income this month" },
   { id: "spending", label: "Spending this month" },
   { id: "net", label: "Monthly net" },
 ];
@@ -44,6 +44,14 @@ type Transaction = {
   category_detailed: string | null;
   iso_currency_code: string | null;
   hidden_from_users?: boolean;
+  category_id: string | null;
+};
+
+type TransactionCategory = {
+  category_id: string;
+  label: string;
+  category_type: "income" | "expense";
+  excluded_from_totals: boolean;
 };
 
 declare global {
@@ -86,6 +94,8 @@ export default function App() {
     if (window.location.hash === "#transactions") return "transactions";
     return "overview";
   });
+  const [adminSection, setAdminSection] = useState<"users" | "finance">("users");
+  const [incomeDisplay, setIncomeDisplay] = useState<"expendable" | "total">("expendable");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -97,6 +107,7 @@ export default function App() {
   const [replacementPassword, setReplacementPassword] = useState("");
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [transactionCategories, setTransactionCategories] = useState<TransactionCategory[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -136,12 +147,14 @@ export default function App() {
     setLoading(true);
     setError("");
     try {
-      const [accountRows, transactionRows] = await Promise.all([
+      const [accountRows, transactionRows, categoryRows] = await Promise.all([
         api<Account[]>("/api/accounts"),
         api<Transaction[]>("/api/transactions"),
+        api<TransactionCategory[]>("/api/transaction-categories"),
       ]);
       setAccounts(accountRows);
       setTransactions(transactionRows);
+      setTransactionCategories(categoryRows);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load financial data");
     } finally {
@@ -172,11 +185,22 @@ export default function App() {
   const totals = useMemo(() => {
     const today = new Date();
     const month = today.toISOString().slice(0, 7);
-    const current = transactions.filter((item) => item.date.startsWith(month));
+    const categoriesByID = new Map(transactionCategories.map((category) => [category.category_id, category]));
+    const current = transactions.filter(
+      (item) => {
+        if (!item.date.startsWith(month)) return false;
+        const category = item.category_id ? categoriesByID.get(item.category_id) : undefined;
+        const transactionType = item.amount < 0 ? "income" : "expense";
+        return !(category?.category_type === transactionType && category.excluded_from_totals);
+      },
+    );
     const spent = current.filter((item) => item.amount > 0).reduce((sum, item) => sum + item.amount, 0);
     const income = current.filter((item) => item.amount < 0).reduce((sum, item) => sum + Math.abs(item.amount), 0);
-    return { spent, income, net: income - spent };
-  }, [transactions]);
+    const expendableIncome = current
+      .filter((item) => item.amount < 0 && item.category_id === "expendable_income")
+      .reduce((sum, item) => sum + Math.abs(item.amount), 0);
+    return { spent, income, expendableIncome, net: income - spent };
+  }, [transactions, transactionCategories]);
 
   const accountGroups = useMemo(() => {
     const groups = accountCategories.map(({ type, label }) => ({
@@ -258,9 +282,63 @@ export default function App() {
     }
   }
 
+  async function setTransactionCategory(item: Transaction, categoryID: string) {
+    setError("");
+    setNotice("");
+    try {
+      const result = await api<{
+        category_id: string | null;
+        matched_transaction_ids: string[];
+        matching_rule_applied: boolean;
+      }>("/api/admin/transactions/category", {
+        method: "PATCH",
+        body: JSON.stringify({ transaction_id: item.transaction_id, category_id: categoryID }),
+      });
+      const matchedIDs = new Set(result.matched_transaction_ids);
+      setTransactions((current) => current.map((transaction) =>
+        matchedIDs.has(transaction.transaction_id)
+          ? { ...transaction, category_id: result.category_id }
+          : transaction,
+      ));
+      const label = transactionCategories.find((category) => category.category_id === categoryID)?.label;
+      if (!categoryID) {
+        setNotice("Using the bank category for this transaction. Similar transactions remain categorized automatically.");
+      } else if (result.matching_rule_applied) {
+        const count = result.matched_transaction_ids.length;
+        setNotice(`Applied ${label ?? "Other"} to ${count} matching transaction${count === 1 ? "" : "s"}. Future matches will use this category.`);
+      } else {
+        setNotice(`Categorized this transaction as ${label ?? "Other"}, but no stable description was available to categorize similar transactions.`);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not categorize transaction");
+    }
+  }
+
+  async function setCategoryExcluded(category: TransactionCategory, excluded: boolean) {
+    setError("");
+    setNotice("");
+    try {
+      await api(`/api/admin/transaction-categories/${encodeURIComponent(category.category_id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ excluded_from_totals: excluded }),
+      });
+      setTransactionCategories((current) => current.map((item) =>
+        item.category_id === category.category_id
+          ? { ...item, excluded_from_totals: excluded }
+          : item,
+      ));
+      const totalName = category.category_type === "income" ? "income" : "spending";
+      setNotice(excluded
+        ? `${category.label} transactions excluded from ${totalName} for all profiles.`
+        : `${category.label} transactions included in ${totalName} for all profiles.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not update category settings");
+    }
+  }
+
   const transactionsPanel = (
     <section className="panel" id="transactions">
-      <div className="panel-heading"><div><h2>Recent transactions</h2><p>Your latest activity across accounts</p></div></div>
+      <div className="panel-heading"><div><h2>Recent transactions</h2><p>{profile?.role === "admin" ? "Categories apply to similar past and future transactions; manage exclusions in Administration." : "Your latest activity across accounts"}</p></div></div>
       {loading ? <div className="empty-state">Loading transactions…</div> : transactions.length === 0 ? (
         <div className="empty-state compact">Transactions will appear here after your first account sync.</div>
       ) : (
@@ -268,19 +346,32 @@ export default function App() {
           {transactions.map((item) => (
             <div className={`transaction-row ${item.hidden_from_users ? "hidden-transaction" : ""}`} key={item.transaction_id}>
               <span className={`transaction-icon ${item.amount < 0 ? "income-icon" : ""}`}>{item.amount < 0 ? <ArrowDownLeft size={17} /> : <ArrowUpRight size={17} />}</span>
-              <div className="transaction-info"><strong>{item.merchant_name || item.name}</strong><span>{item.category_detailed || item.category_primary || "Uncategorized"} · {new Date(`${item.date}T12:00:00`).toLocaleDateString()}</span></div>
+              <div className="transaction-info"><strong>{item.merchant_name || item.name}</strong><span>{transactionCategories.find((category) => category.category_id === item.category_id)?.label || item.category_detailed || item.category_primary || "Uncategorized"} · {new Date(`${item.date}T12:00:00`).toLocaleDateString()}</span></div>
               <strong className={item.amount < 0 ? "positive-text" : ""}>{item.amount < 0 ? "+" : "−"}{money(Math.abs(item.amount), item.iso_currency_code)}{item.pending && <small className="pending"> Pending</small>}</strong>
               {profile?.role === "admin" && (
-                <button
-                  type="button"
-                  className="visibility-button"
-                  onClick={() => void setTransactionVisibility(item)}
-                  aria-label={item.hidden_from_users ? "Show transaction to household users" : "Hide transaction from household users"}
-                  title={item.hidden_from_users ? "Show to household users" : "Hide from household users"}
-                >
-                  {item.hidden_from_users ? <Eye size={15} /> : <EyeOff size={15} />}
-                  <span>{item.hidden_from_users ? "Show" : "Hide"}</span>
-                </button>
+                <div className="transaction-actions">
+                  <select
+                    className="category-select"
+                    value={item.category_id ?? ""}
+                    aria-label={`Category for ${item.merchant_name || item.name}`}
+                    onChange={(event) => void setTransactionCategory(item, event.target.value)}
+                  >
+                    <option value="">Bank category</option>
+                    {transactionCategories.filter((category) => category.category_type === (item.amount < 0 ? "income" : "expense")).map((category) => (
+                      <option key={category.category_id} value={category.category_id}>{category.label}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="visibility-button"
+                    onClick={() => void setTransactionVisibility(item)}
+                    aria-label={item.hidden_from_users ? "Show transaction to household users" : "Hide transaction from household users"}
+                    title={item.hidden_from_users ? "Show to household users" : "Hide from household users"}
+                  >
+                    {item.hidden_from_users ? <Eye size={15} /> : <EyeOff size={15} />}
+                    <span>{item.hidden_from_users ? "Show" : "Hide"}</span>
+                  </button>
+                </div>
               )}
             </div>
           ))}
@@ -379,15 +470,29 @@ export default function App() {
       await api("/api/auth/logout", { method: "POST" });
       setAuthenticated(false);
       setProfile(null);
+      setIncomeDisplay("expendable");
       navigateToPage("overview");
+      setAdminSection("users");
       setHiddenCards([]);
       setProfiles([]);
       setAccounts([]);
       setTransactions([]);
+      setTransactionCategories([]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not sign out");
     }
   }
+
+  const passwordPanel = (
+    <details className="panel password-panel">
+      <summary>Change my password</summary>
+      <form className="profile-form" onSubmit={changePassword}>
+        <label>Current password<input type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /></label>
+        <label>New password<input type="password" autoComplete="new-password" minLength={12} maxLength={72} value={replacementPassword} onChange={(event) => setReplacementPassword(event.target.value)} required /></label>
+        <button className="secondary-button" type="submit">Update password</button>
+      </form>
+    </details>
+  );
 
   if (authenticated === null) {
     return <main className="loading-screen">Loading your workspace…</main>;
@@ -496,35 +601,70 @@ export default function App() {
         {notice && <div className="alert success-message">{notice}</div>}
 
         {activePage === "administration" ? (
-          <>
-            {profile?.role === "admin" && (
-              <section className="panel settings-panel">
-                <div className="panel-heading"><div><h2>Household profiles</h2><p>Profiles share financial data; each person has their own dashboard and password.</p></div></div>
-                <div className="profile-list">
-                  {profiles.map((item) => (
-                    <div className="profile-row" key={item.id}>
-                      <strong>{item.username}</strong>
-                      <span>{item.role === "admin" ? "Administrator" : "Household user"}</span>
+          profile?.role === "admin" ? (
+            <>
+              <div className="admin-tabs" role="group" aria-label="Administration sections">
+                <button
+                  type="button"
+                  className={`admin-tab ${adminSection === "users" ? "active" : ""}`}
+                  aria-pressed={adminSection === "users"}
+                  onClick={() => setAdminSection("users")}
+                >User management</button>
+                <button
+                  type="button"
+                  className={`admin-tab ${adminSection === "finance" ? "active" : ""}`}
+                  aria-pressed={adminSection === "finance"}
+                  onClick={() => setAdminSection("finance")}
+                >Financial management</button>
+              </div>
+              {adminSection === "users" ? (
+                <>
+                  <section className="panel settings-panel">
+                    <div className="panel-heading"><div><h2>Household profiles</h2><p>Profiles share financial data; each person has their own dashboard and password.</p></div></div>
+                    <div className="profile-list">
+                      {profiles.map((item) => (
+                        <div className="profile-row" key={item.id}>
+                          <strong>{item.username}</strong>
+                          <span>{item.role === "admin" ? "Administrator" : "Household user"}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-                <form className="profile-form" onSubmit={createProfile}>
-                  <label>New username<input autoComplete="off" minLength={3} maxLength={32} value={newUsername} onChange={(event) => setNewUsername(event.target.value)} required /></label>
-                  <label>Temporary password<input type="password" autoComplete="new-password" minLength={12} maxLength={72} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required /></label>
-                  <button className="primary-button" type="submit">Create household profile</button>
-                </form>
-              </section>
-            )}
-
-            <details className="panel password-panel">
-              <summary>Change my password</summary>
-              <form className="profile-form" onSubmit={changePassword}>
-                <label>Current password<input type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /></label>
-                <label>New password<input type="password" autoComplete="new-password" minLength={12} maxLength={72} value={replacementPassword} onChange={(event) => setReplacementPassword(event.target.value)} required /></label>
-                <button className="secondary-button" type="submit">Update password</button>
-              </form>
-            </details>
-          </>
+                    <form className="profile-form" onSubmit={createProfile}>
+                      <label>New username<input autoComplete="off" minLength={3} maxLength={32} value={newUsername} onChange={(event) => setNewUsername(event.target.value)} required /></label>
+                      <label>Temporary password<input type="password" autoComplete="new-password" minLength={12} maxLength={72} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required /></label>
+                      <button className="primary-button" type="submit">Create household profile</button>
+                    </form>
+                  </section>
+                  {passwordPanel}
+                </>
+              ) : (
+                <section className="panel settings-panel">
+                  <div className="panel-heading">
+                    <div><h2>Monthly total exclusions</h2><p>Exclude categories from Spending or Income. Monthly Net uses the adjusted totals for every profile.</p></div>
+                  </div>
+                  <div className="category-exclusion-groups">
+                    {(["expense", "income"] as const).map((categoryType) => (
+                      <section className="category-exclusion-group" key={categoryType}>
+                        <h3>{categoryType === "expense" ? "Spending" : "Income"}</h3>
+                        <div className="preference-list">
+                          {transactionCategories.filter((category) => category.category_type === categoryType).map((category) => (
+                            <label className="preference-option" key={category.category_id}>
+                              <input
+                                type="checkbox"
+                                checked={category.excluded_from_totals}
+                                onChange={(event) => void setCategoryExcluded(category, event.target.checked)}
+                              />
+                              Exclude {category.label} from {categoryType === "expense" ? "spending" : "income"}
+                            </label>
+                          ))}
+                        </div>
+                      </section>
+                    ))}
+                  </div>
+                </section>
+              )}
+            </>
+          ) : passwordPanel
         ) : activePage === "transactions" ? (
           <>
             {accounts.some((account) => account.demo_data) && (
@@ -554,17 +694,24 @@ export default function App() {
             </section>
 
         <div className="summary-grid">
+          {!hiddenCards.includes("income") && <article className="summary-card income-card">
+            <div className="income-summary-heading">
+              <div className="summary-label">{incomeDisplay === "expendable" ? "TOTAL EXPENDABLE INCOME" : "TOTAL INCOME THIS MONTH"}</div>
+              <button
+                type="button"
+                className="summary-toggle"
+                onClick={() => setIncomeDisplay(incomeDisplay === "expendable" ? "total" : "expendable")}
+              >View {incomeDisplay === "expendable" ? "total income" : "expendable income"}</button>
+            </div>
+            <div className="summary-value">{money(incomeDisplay === "expendable" ? totals.expendableIncome : totals.income)}</div>
+            <div className="summary-foot positive"><ArrowDownLeft size={15} /> {incomeDisplay === "expendable" ? "Expendable inflows" : "All income inflows"}</div>
+          </article>}
           {!hiddenCards.includes("balance") && <article className="summary-card balance-card">
             <div className="summary-label">TOTAL ACCOUNT BALANCE</div>
             <div className="summary-value">
               {money(accounts.reduce((sum, account) => sum + (account.current_balance ?? 0), 0))}
             </div>
             <div className="summary-foot"><Wallet size={15} /> Across {accounts.length} connected account{accounts.length === 1 ? "" : "s"}</div>
-          </article>}
-          {!hiddenCards.includes("income") && <article className="summary-card">
-            <div className="summary-label">INCOME THIS MONTH</div>
-            <div className="summary-value">{money(totals.income)}</div>
-            <div className="summary-foot positive"><ArrowDownLeft size={15} /> Inflows</div>
           </article>}
           {!hiddenCards.includes("spending") && <article className="summary-card">
             <div className="summary-label">SPENDING THIS MONTH</div>

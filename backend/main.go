@@ -13,8 +13,10 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"snappy-finance/backend/webassets"
 )
@@ -90,6 +92,9 @@ func main() {
 	mux.Handle("GET /api/accounts", a.requireAuth(http.HandlerFunc(a.listAccounts)))
 	mux.Handle("GET /api/transactions", a.requireAuth(http.HandlerFunc(a.listTransactions)))
 	mux.Handle("PATCH /api/admin/transactions/visibility", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.updateTransactionVisibility))))
+	mux.Handle("PATCH /api/admin/transactions/category", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.updateTransactionCategory))))
+	mux.Handle("GET /api/transaction-categories", a.requireAuth(http.HandlerFunc(a.listTransactionCategories)))
+	mux.Handle("PATCH /api/admin/transaction-categories/{categoryID}", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.updateTransactionCategoryExclusion))))
 	mux.Handle("/", webassets.Handler())
 
 	server := &http.Server{
@@ -278,7 +283,7 @@ func (a *app) listTransactions(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.db.Query(r.Context(), `
 		SELECT transaction_id, account_id, name, merchant_name, amount, transaction_date::text,
 		       pending, category_primary, category_detailed, iso_currency_code,
-		       CASE WHEN $1 THEN hidden_from_users ELSE FALSE END
+		       CASE WHEN $1 THEN hidden_from_users ELSE FALSE END, category_id
 		FROM transactions
 		WHERE $1 OR NOT hidden_from_users
 		ORDER BY transaction_date DESC, transaction_id
@@ -294,7 +299,7 @@ func (a *app) listTransactions(w http.ResponseWriter, r *http.Request) {
 		var item transaction
 		if err := rows.Scan(&item.TransactionID, &item.AccountID, &item.Name, &item.MerchantName, &item.Amount,
 			&item.Date, &item.Pending, &item.CategoryPrimary, &item.CategoryDetailed, &item.Currency,
-			&item.HiddenFromUsers); err != nil {
+			&item.HiddenFromUsers, &item.CategoryID); err != nil {
 			log.Printf("scan transaction row: %v", err)
 			writeError(w, http.StatusInternalServerError, "could not load transactions")
 			return
@@ -332,6 +337,197 @@ func (a *app) updateTransactionVisibility(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"hidden_from_users": *input.HiddenFromUsers})
+}
+
+func (a *app) listTransactionCategories(w http.ResponseWriter, r *http.Request) {
+	rows, err := a.db.Query(r.Context(), `
+		SELECT category_id, label, category_type, excluded_from_totals
+		FROM transaction_categories
+		ORDER BY label`)
+	if err != nil {
+		log.Printf("query transaction categories: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load transaction categories")
+		return
+	}
+	defer rows.Close()
+	categories := make([]transactionCategory, 0)
+	for rows.Next() {
+		var category transactionCategory
+		if err := rows.Scan(&category.CategoryID, &category.Label, &category.CategoryType, &category.ExcludedFromTotals); err != nil {
+			log.Printf("scan transaction category: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not load transaction categories")
+			return
+		}
+		categories = append(categories, category)
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("iterate transaction categories: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load transaction categories")
+		return
+	}
+	writeJSON(w, http.StatusOK, categories)
+}
+
+func (a *app) updateTransactionCategory(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		TransactionID string  `json:"transaction_id"`
+		CategoryID    *string `json:"category_id"`
+	}
+	if err := decodeJSON(r, &input); err != nil || input.TransactionID == "" || input.CategoryID == nil {
+		writeError(w, http.StatusBadRequest, "transaction_id and category_id are required")
+		return
+	}
+	categoryID := strings.TrimSpace(*input.CategoryID)
+
+	tx, err := a.db.Begin(r.Context())
+	if err != nil {
+		log.Printf("begin transaction category update: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not update transaction category")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	var matchKey string
+	var isIncome bool
+	err = tx.QueryRow(r.Context(), `
+		SELECT category_match_key, amount < 0
+		FROM transactions
+		WHERE transaction_id = $1
+		FOR UPDATE`, input.TransactionID).Scan(&matchKey, &isIncome)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "transaction not found")
+		return
+	}
+	if err != nil {
+		log.Printf("load transaction for category update: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not update transaction category")
+		return
+	}
+
+	var categoryType string
+	if categoryID != "" {
+		err := tx.QueryRow(r.Context(), `
+			SELECT category_type
+			FROM transaction_categories
+			WHERE category_id = $1`, categoryID).Scan(&categoryType)
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusBadRequest, "unknown transaction category")
+			return
+		}
+		if err != nil {
+			log.Printf("load transaction category: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not update transaction category")
+			return
+		}
+		if (categoryType == "income") != isIncome {
+			writeError(w, http.StatusBadRequest, "category type does not match transaction amount")
+			return
+		}
+	}
+
+	if categoryID != "" && matchKey != "" {
+		_, err := tx.Exec(r.Context(), `
+			INSERT INTO transaction_category_rules (category_type, match_key, category_id)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (category_type, match_key) DO UPDATE
+			SET category_id = EXCLUDED.category_id, updated_at = NOW()`,
+			categoryType, matchKey, categoryID)
+		if err != nil {
+			log.Printf("save transaction category rule: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not update transaction category")
+			return
+		}
+	}
+
+	var updateQuery string
+	var updateArgs []any
+	if categoryID == "" {
+		updateQuery = `
+			UPDATE transactions
+			SET category_id = NULL, category_rule_exempt = TRUE
+			WHERE transaction_id = $1
+			RETURNING transaction_id`
+		updateArgs = []any{input.TransactionID}
+	} else if matchKey == "" {
+		updateQuery = `
+			UPDATE transactions
+			SET category_id = $1, category_rule_exempt = FALSE
+			WHERE transaction_id = $2
+			RETURNING transaction_id`
+		updateArgs = []any{categoryID, input.TransactionID}
+	} else {
+		updateQuery = `
+			UPDATE transactions
+			SET category_id = $1, category_rule_exempt = FALSE
+			WHERE category_match_key = $2 AND (amount < 0) = $3
+			RETURNING transaction_id`
+		updateArgs = []any{categoryID, matchKey, isIncome}
+	}
+
+	rows, err := tx.Query(r.Context(), updateQuery, updateArgs...)
+	if err != nil {
+		log.Printf("apply transaction category: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not update transaction category")
+		return
+	}
+	matchedTransactionIDs := make([]string, 0)
+	for rows.Next() {
+		var transactionID string
+		if err := rows.Scan(&transactionID); err != nil {
+			rows.Close()
+			log.Printf("scan categorized transaction: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not update transaction category")
+			return
+		}
+		matchedTransactionIDs = append(matchedTransactionIDs, transactionID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		log.Printf("iterate categorized transactions: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not update transaction category")
+		return
+	}
+	rows.Close()
+
+	if err := tx.Commit(r.Context()); err != nil {
+		log.Printf("commit transaction category update: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not update transaction category")
+		return
+	}
+	var result *string
+	if categoryID != "" {
+		result = &categoryID
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"category_id":             result,
+		"matched_transaction_ids": matchedTransactionIDs,
+		"matching_rule_applied":   categoryID != "" && matchKey != "",
+	})
+}
+
+func (a *app) updateTransactionCategoryExclusion(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		ExcludedFromTotals *bool `json:"excluded_from_totals"`
+	}
+	categoryID := r.PathValue("categoryID")
+	if err := decodeJSON(r, &input); err != nil || categoryID == "" || input.ExcludedFromTotals == nil {
+		writeError(w, http.StatusBadRequest, "excluded_from_totals is required")
+		return
+	}
+	tag, err := a.db.Exec(r.Context(), `
+		UPDATE transaction_categories
+		SET excluded_from_totals = $1
+		WHERE category_id = $2`, *input.ExcludedFromTotals, categoryID)
+	if err != nil {
+		log.Printf("update transaction category exclusion: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not update transaction category")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "transaction category not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"excluded_from_totals": *input.ExcludedFromTotals})
 }
 
 func (a *app) refreshAccounts(ctx context.Context, itemID, accessToken string) error {
@@ -431,13 +627,23 @@ func (a *app) persistTransactionPage(ctx context.Context, itemID string, result 
 		_, err := tx.Exec(ctx, `
 			INSERT INTO transactions (
 				transaction_id, item_id, account_id, name, merchant_name, amount,
-				transaction_date, pending, category_primary, category_detailed, iso_currency_code
-			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+				transaction_date, pending, category_primary, category_detailed, iso_currency_code,
+				category_match_key, category_id
+			) VALUES (
+				$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
+				transaction_category_match_key($5, $4),
+				(SELECT category_id
+				 FROM transaction_category_rules
+				 WHERE match_key = transaction_category_match_key($5, $4)
+				   AND category_type = CASE WHEN $6 < 0 THEN 'income' ELSE 'expense' END)
+			)
 			ON CONFLICT (transaction_id) DO UPDATE SET
 				account_id=EXCLUDED.account_id, name=EXCLUDED.name, merchant_name=EXCLUDED.merchant_name,
 				amount=EXCLUDED.amount, transaction_date=EXCLUDED.transaction_date, pending=EXCLUDED.pending,
 				category_primary=EXCLUDED.category_primary, category_detailed=EXCLUDED.category_detailed,
-				iso_currency_code=EXCLUDED.iso_currency_code, updated_at=NOW()`,
+				iso_currency_code=EXCLUDED.iso_currency_code, category_match_key=EXCLUDED.category_match_key,
+				category_id=CASE WHEN transactions.category_rule_exempt THEN NULL ELSE EXCLUDED.category_id END,
+				updated_at=NOW()`,
 			item.TransactionID, itemID, item.AccountID, item.Name, item.MerchantName, item.Amount,
 			item.Date, item.Pending, item.PersonalFinanceCategory.Primary,
 			item.PersonalFinanceCategory.Detailed, item.IsoCurrencyCode)
@@ -495,6 +701,14 @@ type transaction struct {
 	CategoryDetailed *string `json:"category_detailed"`
 	Currency         *string `json:"iso_currency_code"`
 	HiddenFromUsers  bool    `json:"hidden_from_users,omitempty"`
+	CategoryID       *string `json:"category_id"`
+}
+
+type transactionCategory struct {
+	CategoryID         string `json:"category_id"`
+	Label              string `json:"label"`
+	CategoryType       string `json:"category_type"`
+	ExcludedFromTotals bool   `json:"excluded_from_totals"`
 }
 
 func encrypt(key []byte, plaintext string) ([]byte, error) {
