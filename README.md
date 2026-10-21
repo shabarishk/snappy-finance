@@ -6,6 +6,7 @@ A self-hosted personal finance app scaffold using Go, React, PostgreSQL, and Pla
 
 - Admin and household-user profiles with individual passwords and HTTP-only sessions.
 - Shared household financial data, profile-specific dashboard card preferences, and admin-only Plaid/profile management.
+- Administrators can hide selected transactions from household users while retaining access to them.
 - Plaid Link token creation and public-token exchange.
 - AES-GCM encryption of stored Plaid access tokens.
 - Cursor-based Plaid Transactions Sync with added, modified, and removed transaction handling.

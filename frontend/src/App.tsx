@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowDownLeft, ArrowUpRight, Banknote, Landmark, LockKeyhole, LogOut, RefreshCw, Wallet } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Banknote, Eye, EyeOff, Landmark, LockKeyhole, LogOut, RefreshCw, Wallet } from "lucide-react";
 
 type Profile = {
   id: string;
@@ -43,6 +43,7 @@ type Transaction = {
   category_primary: string | null;
   category_detailed: string | null;
   iso_currency_code: string | null;
+  hidden_from_users?: boolean;
 };
 
 declare global {
@@ -188,6 +189,31 @@ export default function App() {
       setHiddenCards(result.hidden_cards);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save dashboard preferences");
+    }
+  }
+
+  async function setTransactionVisibility(item: Transaction) {
+    const hiddenFromUsers = !item.hidden_from_users;
+    setError("");
+    setNotice("");
+    try {
+      await api("/api/admin/transactions/visibility", {
+        method: "PATCH",
+        body: JSON.stringify({
+          transaction_id: item.transaction_id,
+          hidden_from_users: hiddenFromUsers,
+        }),
+      });
+      setTransactions((current) => current.map((transaction) =>
+        transaction.transaction_id === item.transaction_id
+          ? { ...transaction, hidden_from_users: hiddenFromUsers }
+          : transaction,
+      ));
+      setNotice(hiddenFromUsers
+        ? "Transaction hidden from household users."
+        : "Transaction visible to household users.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not update transaction visibility");
     }
   }
 
@@ -473,10 +499,22 @@ export default function App() {
           ) : (
             <div className="transaction-list">
               {transactions.map((item) => (
-                <div className="transaction-row" key={item.transaction_id}>
+                <div className={`transaction-row ${item.hidden_from_users ? "hidden-transaction" : ""}`} key={item.transaction_id}>
                   <span className={`transaction-icon ${item.amount < 0 ? "income-icon" : ""}`}>{item.amount < 0 ? <ArrowDownLeft size={17} /> : <ArrowUpRight size={17} />}</span>
                   <div className="transaction-info"><strong>{item.merchant_name || item.name}</strong><span>{item.category_detailed || item.category_primary || "Uncategorized"} · {new Date(`${item.date}T12:00:00`).toLocaleDateString()}</span></div>
                   <strong className={item.amount < 0 ? "positive-text" : ""}>{item.amount < 0 ? "+" : "−"}{money(Math.abs(item.amount), item.iso_currency_code)}{item.pending && <small className="pending"> Pending</small>}</strong>
+                  {profile?.role === "admin" && (
+                    <button
+                      type="button"
+                      className="visibility-button"
+                      onClick={() => void setTransactionVisibility(item)}
+                      aria-label={item.hidden_from_users ? "Show transaction to household users" : "Hide transaction from household users"}
+                      title={item.hidden_from_users ? "Show to household users" : "Hide from household users"}
+                    >
+                      {item.hidden_from_users ? <Eye size={15} /> : <EyeOff size={15} />}
+                      <span>{item.hidden_from_users ? "Show" : "Hide"}</span>
+                    </button>
+                  )}
                 </div>
               ))}
             </div>

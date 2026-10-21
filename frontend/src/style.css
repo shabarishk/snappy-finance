@@ -84,6 +84,9 @@ button { cursor: pointer; }
 .transaction-icon { background: #fbf1ee; color: #b97768; }
 .transaction-icon.income-icon { background: #edf7f1; color: var(--green); }
 .transaction-row > strong { white-space: nowrap; }
+.hidden-transaction .transaction-info strong { color: #84918a; }
+.visibility-button { align-items: center; background: white; border: 1px solid #dfe6e1; border-radius: 7px; color: #52615a; display: inline-flex; flex: 0 0 auto; font-size: 10px; gap: 5px; margin-left: 12px; padding: 7px 9px; }
+.visibility-button:hover { background: #f9fbf9; }
 .pending { color: #a8864a; font-size: 9px; font-weight: 500; }
 .empty-state { align-items: center; color: var(--muted); display: flex; flex-direction: column; font-size: 11px; gap: 10px; justify-content: center; min-height: 190px; padding: 25px; text-align: center; }
 .empty-state strong { color: #3b4a43; font-size: 13px; }

@@ -34,9 +34,9 @@ type config struct {
 }
 
 type app struct {
-	cfg       config
-	db        *pgxpool.Pool
-	plaid     *plaidClient
+	cfg   config
+	db    *pgxpool.Pool
+	plaid *plaidClient
 }
 
 func main() {
@@ -89,6 +89,7 @@ func main() {
 	mux.Handle("POST /api/plaid/sync", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.syncNow))))
 	mux.Handle("GET /api/accounts", a.requireAuth(http.HandlerFunc(a.listAccounts)))
 	mux.Handle("GET /api/transactions", a.requireAuth(http.HandlerFunc(a.listTransactions)))
+	mux.Handle("PATCH /api/admin/transactions/visibility", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.updateTransactionVisibility))))
 	mux.Handle("/", webassets.Handler())
 
 	server := &http.Server{
@@ -273,12 +274,15 @@ func (a *app) listAccounts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) listTransactions(w http.ResponseWriter, r *http.Request) {
+	isAdmin := currentPrincipal(r).Role == "admin"
 	rows, err := a.db.Query(r.Context(), `
 		SELECT transaction_id, account_id, name, merchant_name, amount, transaction_date::text,
-		       pending, category_primary, category_detailed, iso_currency_code
+		       pending, category_primary, category_detailed, iso_currency_code,
+		       CASE WHEN $1 THEN hidden_from_users ELSE FALSE END
 		FROM transactions
+		WHERE $1 OR NOT hidden_from_users
 		ORDER BY transaction_date DESC, transaction_id
-		LIMIT 500`)
+		LIMIT 500`, isAdmin)
 	if err != nil {
 		log.Printf("query transactions: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not load transactions")
@@ -289,7 +293,8 @@ func (a *app) listTransactions(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var item transaction
 		if err := rows.Scan(&item.TransactionID, &item.AccountID, &item.Name, &item.MerchantName, &item.Amount,
-			&item.Date, &item.Pending, &item.CategoryPrimary, &item.CategoryDetailed, &item.Currency); err != nil {
+			&item.Date, &item.Pending, &item.CategoryPrimary, &item.CategoryDetailed, &item.Currency,
+			&item.HiddenFromUsers); err != nil {
 			log.Printf("scan transaction row: %v", err)
 			writeError(w, http.StatusInternalServerError, "could not load transactions")
 			return
@@ -302,6 +307,31 @@ func (a *app) listTransactions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, transactions)
+}
+
+func (a *app) updateTransactionVisibility(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		TransactionID   string `json:"transaction_id"`
+		HiddenFromUsers *bool  `json:"hidden_from_users"`
+	}
+	if err := decodeJSON(r, &input); err != nil || input.TransactionID == "" || input.HiddenFromUsers == nil {
+		writeError(w, http.StatusBadRequest, "transaction_id and hidden_from_users are required")
+		return
+	}
+	tag, err := a.db.Exec(r.Context(), `
+		UPDATE transactions
+		SET hidden_from_users = $1
+		WHERE transaction_id = $2`, *input.HiddenFromUsers, input.TransactionID)
+	if err != nil {
+		log.Printf("update transaction visibility: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not update transaction visibility")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "transaction not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"hidden_from_users": *input.HiddenFromUsers})
 }
 
 func (a *app) refreshAccounts(ctx context.Context, itemID, accessToken string) error {
@@ -464,6 +494,7 @@ type transaction struct {
 	CategoryPrimary  *string `json:"category_primary"`
 	CategoryDetailed *string `json:"category_detailed"`
 	Currency         *string `json:"iso_currency_code"`
+	HiddenFromUsers  bool    `json:"hidden_from_users,omitempty"`
 }
 
 func encrypt(key []byte, plaintext string) ([]byte, error) {
