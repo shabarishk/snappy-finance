@@ -21,7 +21,7 @@ For a one-command Windows setup with fictional sample data and generated local c
 .\scripts\start-demo.ps1
 ```
 
-Open `http://localhost:8080` and use the sign-in password printed by the script. Press Ctrl+C to stop the app. The script creates `.env` only if one does not already exist, does not overwrite existing credentials, and uses a separate Compose project/database volume for its demo data.
+Open `http://localhost:8080` and use the sign-in credentials printed by the script. Press Ctrl+C to stop the app. The script stores demo-only credentials in `.env.demo` and uses a separate Compose project/database volume. To regenerate credentials, stop the app and run `.\scripts\start-demo.ps1 -ResetCredentials`; this removes the demo database volume and its demo data.
 
 To configure manually:
 

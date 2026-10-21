@@ -70,6 +70,11 @@ button { cursor: pointer; }
 .panel-heading h2 { font-family: "Segoe UI", system-ui, sans-serif; font-size: 15px; letter-spacing: -.02em; margin: 0; }
 .panel-heading p { color: var(--muted); font-size: 11px; margin: 5px 0 0; }
 .account-list, .transaction-list { padding: 0 22px; }
+.account-group + .account-group { border-top: 1px solid var(--line); }
+.account-group-heading { align-items: center; color: #52615a; display: flex; justify-content: space-between; padding: 15px 0 4px; }
+.account-group-heading h3 { font-size: 11px; font-weight: 600; margin: 0; }
+.account-group-heading span { color: var(--muted); font-size: 10px; }
+.account-group-empty { color: var(--muted); font-size: 10px; padding: 10px 0 15px; }
 .account-row, .transaction-row { align-items: center; border-bottom: 1px solid #f0f2f0; display: flex; min-height: 68px; }
 .account-row:last-child, .transaction-row:last-child { border-bottom: 0; }
 .account-icon, .transaction-icon { align-items: center; background: #f2f7f3; border-radius: 9px; color: #4f8e70; display: inline-flex; flex: 0 0 36px; height: 36px; justify-content: center; margin-right: 12px; }

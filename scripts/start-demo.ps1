@@ -1,7 +1,11 @@
+param(
+    [switch]$ResetCredentials
+)
+
 $ErrorActionPreference = "Stop"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
+$composeProject = "snappy-finance-demo-local"
 $overrides = @{
-    COMPOSE_PROJECT_NAME = "snappy-finance-demo-local"
     DEMO_DATA = "true"
     API_PORT = "127.0.0.1:8081"
     PLAID_CLIENT_ID = ""
@@ -26,7 +30,9 @@ function New-RandomBase64([int]$ByteCount) {
 }
 
 try {
-    if (-not (Test-Path ".env")) {
+    $environmentFile = ".env.demo"
+    $credentialsGenerated = $ResetCredentials -or -not (Test-Path $environmentFile)
+    if ($credentialsGenerated) {
         $adminPassword = (New-RandomBase64 24).TrimEnd("=").Replace("+", "-").Replace("/", "_")
         $lines = @(
             "ADMIN_USERNAME=admin"
@@ -36,15 +42,23 @@ try {
             "POSTGRES_PASSWORD=$(New-RandomBase64 32)"
             "DEMO_DATA=true"
         )
-        Set-Content -Path ".env" -Value $lines -Encoding ASCII
-        Write-Host "Created .env with local-only credentials and demo data enabled."
+        Set-Content -Path $environmentFile -Value $lines -Encoding ASCII
+        Write-Host "Created $environmentFile with local-only credentials and demo data enabled."
         Write-Host "Sign-in username: admin"
         Write-Host "Sign-in password: $adminPassword"
-    } else {
-        Write-Host "Using the existing .env without changing it. The demo uses a separate Compose project and database volume."
     }
 
-    docker compose up --build
+    if ($ResetCredentials) {
+        docker compose --env-file $environmentFile -p $composeProject down --volumes
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not reset the demo Compose project (exit code $LASTEXITCODE)"
+        }
+        Write-Host "Removed the demo containers and database volume."
+    } elseif (-not $credentialsGenerated) {
+        Write-Host "Using the existing $environmentFile. To rotate credentials, run this script with -ResetCredentials."
+    }
+
+    docker compose --env-file $environmentFile -p $composeProject up --build
     if ($LASTEXITCODE -ne 0) {
         throw "docker compose up failed with exit code $LASTEXITCODE"
     }

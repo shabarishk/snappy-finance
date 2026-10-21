@@ -26,6 +26,12 @@ type Account = {
   demo_data: boolean;
 };
 
+const accountCategories = [
+  { type: "depository", label: "Cash accounts" },
+  { type: "credit", label: "Credit accounts" },
+  { type: "loan", label: "Loan accounts" },
+];
+
 type Transaction = {
   transaction_id: string;
   account_id: string;
@@ -134,6 +140,18 @@ export default function App() {
     const income = current.filter((item) => item.amount < 0).reduce((sum, item) => sum + Math.abs(item.amount), 0);
     return { spent, income, net: income - spent };
   }, [transactions]);
+
+  const accountGroups = useMemo(() => {
+    const groups = accountCategories.map(({ type, label }) => ({
+      label,
+      accounts: accounts.filter((account) => account.type.toLowerCase() === type),
+    }));
+    const otherAccounts = accounts.filter(
+      (account) => !accountCategories.some(({ type }) => account.type.toLowerCase() === type),
+    );
+    if (otherAccounts.length > 0) groups.push({ label: "Other accounts", accounts: otherAccounts });
+    return groups;
+  }, [accounts]);
 
   async function signIn(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -427,12 +445,22 @@ export default function App() {
             </div>
           ) : (
             <div className="account-list">
-              {accounts.map((account) => (
-                <div className="account-row" key={account.account_id}>
-                  <span className="account-icon"><Landmark size={18} /></span>
-                  <div className="account-info"><strong>{account.official_name || account.name}</strong><span>{account.type}{account.subtype ? ` · ${account.subtype}` : ""}{account.mask ? ` ···· ${account.mask}` : ""}{account.demo_data ? " · DEMO" : ""}</span></div>
-                  <strong className="account-balance">{money(account.current_balance, account.iso_currency_code)}</strong>
-                </div>
+              {accountGroups.map((group) => (
+                <section className="account-group" key={group.label}>
+                  <div className="account-group-heading">
+                    <h3>{group.label}</h3>
+                    <span>{group.accounts.length}</span>
+                  </div>
+                  {group.accounts.length === 0 ? (
+                    <div className="account-group-empty">No {group.label.toLowerCase()} connected.</div>
+                  ) : group.accounts.map((account) => (
+                    <div className="account-row" key={account.account_id}>
+                      <span className="account-icon"><Landmark size={18} /></span>
+                      <div className="account-info"><strong>{account.official_name || account.name}</strong><span>{account.type}{account.subtype ? ` · ${account.subtype}` : ""}{account.mask ? ` ···· ${account.mask}` : ""}{account.demo_data ? " · DEMO" : ""}</span></div>
+                      <strong className="account-balance">{money(account.current_balance, account.iso_currency_code)}</strong>
+                    </div>
+                  ))}
+                </section>
               ))}
             </div>
           )}
