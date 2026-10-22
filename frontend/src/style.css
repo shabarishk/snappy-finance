@@ -132,6 +132,10 @@ button { cursor: pointer; }
 .profile-form input:focus, .profile-form select:focus { border-color: #78b89b; box-shadow: 0 0 0 3px #19856815; }
 .finance-form { border-bottom: 1px solid var(--line); }
 .finance-help { color: var(--muted); font-size: 10px; line-height: 1.5; margin: 0; padding: 0 21px 16px; }
+.credit-cycle-form { align-items: end; }
+.credit-cycle-account { display: flex; flex: 1 1 180px; flex-direction: column; gap: 5px; min-width: 0; padding-bottom: 7px; }
+.credit-cycle-account strong { color: #52615a; font-size: 11px; }
+.credit-cycle-account span { color: var(--muted); font-size: 10px; }
 .manual-statement-list { padding: 15px 21px; }
 .manual-statement-list h3 { color: #52615a; font-size: 11px; margin: 0 0 8px; }
 .manual-statement-row { align-items: center; border-top: 1px solid var(--line); display: flex; gap: 12px; min-height: 54px; }
@@ -200,6 +204,21 @@ button { cursor: pointer; }
 .panel-heading h2 { font-family: "Segoe UI", system-ui, sans-serif; font-size: 15px; letter-spacing: -.02em; margin: 0; }
 .panel-heading p { color: var(--muted); font-size: 11px; margin: 5px 0 0; }
 .account-list, .transaction-list { padding: 0 22px; }
+.liquidity-month-grid { display: grid; gap: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.liquidity-month { min-width: 0; padding: 18px; }
+.liquidity-month + .liquidity-month { border-left: 1px solid var(--line); }
+.liquidity-month-heading { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.liquidity-month-heading h3 { color: #34463e; font-size: 13px; margin: 0; }
+.liquidity-month-heading span { color: var(--muted); font-size: 10px; }
+.liquidity-chart-content { align-items: center; display: flex; gap: 14px; }
+.liquidity-pie { flex: 0 0 116px; height: 116px; width: 116px; }
+.liquidity-legend { display: flex; flex: 1; flex-direction: column; gap: 8px; list-style: none; margin: 0; min-width: 0; padding: 0; }
+.liquidity-legend li { align-items: center; display: grid; gap: 5px; grid-template-columns: 8px minmax(0, 1fr) auto; }
+.liquidity-legend-color { border-radius: 50%; height: 8px; width: 8px; }
+.liquidity-legend-label { color: #65736c; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.liquidity-legend strong { color: #52615a; font-size: 10px; font-weight: 600; white-space: nowrap; }
+.liquidity-empty { align-items: center; color: var(--muted); display: flex; font-size: 10px; min-height: 116px; }
+.liquidity-help { border-top: 1px solid var(--line); padding-top: 12px; }
 .account-group + .account-group { border-top: 1px solid var(--line); }
 .account-group-heading { align-items: center; color: #52615a; display: flex; justify-content: space-between; padding: 15px 0 4px; }
 .account-group-heading h3 { font-size: 11px; font-weight: 600; margin: 0; }
@@ -324,6 +343,10 @@ footer { color: #9aa39e; font-size: 10px; padding: 6px 0 16px; }
   .projection-period-list { padding-left: 15px; padding-right: 15px; }
   .projection-pay-period { align-items: flex-start; flex-direction: column; gap: 3px; }
   .projection-details-grid { grid-template-columns: minmax(0, 1fr); }
+  .liquidity-month-grid { grid-template-columns: minmax(0, 1fr); }
+  .liquidity-month + .liquidity-month { border-left: 0; border-top: 1px solid var(--line); }
+  .liquidity-chart-content { justify-content: flex-start; }
+  .liquidity-legend { max-width: 420px; }
 }
 
 @media (orientation: landscape) {

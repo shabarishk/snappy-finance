@@ -127,6 +127,8 @@ type Account = {
   current_balance: number | null;
   iso_currency_code: string | null;
   demo_data: boolean;
+  statement_close_day: number | null;
+  statement_due_day: number | null;
 };
 
 const accountCategories = [
@@ -158,6 +160,70 @@ type TransactionCategory = {
   category_type: "income" | "expense";
   excluded_from_totals: boolean;
 };
+
+type LiquidityCategory = {
+  label: string;
+  amount: number;
+};
+
+type LiquiditySpendMonth = {
+  spend_month: string;
+  categories: LiquidityCategory[];
+};
+
+type DashboardLiquidity = {
+  months: LiquiditySpendMonth[];
+  unconfigured_credit_accounts: string[];
+};
+
+const liquidityChartColors = ["#198568", "#4a9b78", "#79b58e", "#a6c89e", "#d0d99c", "#e5b86d", "#d98268", "#9e829b", "#6f8ba5"];
+
+function SpendingPieChart({ month }: { month: LiquiditySpendMonth }) {
+  const total = month.categories.reduce((sum, category) => sum + category.amount, 0);
+  const [year, monthNumber] = month.spend_month.split("-").map(Number);
+  const periodLabel = getStatisticsRange("spend", month.spend_month).label;
+  let startAngle = -Math.PI / 2;
+  const slices = month.categories.map((category, index) => {
+    const angle = total > 0 ? (category.amount / total) * Math.PI * 2 : 0;
+    const endAngle = startAngle + angle;
+    const startX = 100 + 82 * Math.cos(startAngle);
+    const startY = 100 + 82 * Math.sin(startAngle);
+    const endX = 100 + 82 * Math.cos(endAngle);
+    const endY = 100 + 82 * Math.sin(endAngle);
+    const path = month.categories.length === 1
+      ? ""
+      : `M 100 100 L ${startX} ${startY} A 82 82 0 ${angle > Math.PI ? 1 : 0} 1 ${endX} ${endY} Z`;
+    startAngle = endAngle;
+    return { ...category, color: liquidityChartColors[index % liquidityChartColors.length], path };
+  });
+
+  return (
+    <article className="liquidity-month">
+      <div className="liquidity-month-heading">
+        <h3>{new Date(year, monthNumber - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" })}</h3>
+        <span>{periodLabel}</span>
+      </div>
+      {total > 0 ? (
+        <div className="liquidity-chart-content">
+          <svg className="liquidity-pie" viewBox="0 0 200 200" role="img" aria-label={`Spending by category totaling ${money(total)}`}>
+            {slices.map((slice) => slice.path
+              ? <path key={slice.label} d={slice.path} fill={slice.color}><title>{slice.label}: {money(slice.amount)}</title></path>
+              : <circle key={slice.label} cx="100" cy="100" r="82" fill={slice.color}><title>{slice.label}: {money(slice.amount)}</title></circle>)}
+          </svg>
+          <ul className="liquidity-legend">
+            {slices.map((slice) => (
+              <li key={slice.label}>
+                <span className="liquidity-legend-color" style={{ backgroundColor: slice.color }} />
+                <span className="liquidity-legend-label">{slice.label}</span>
+                <strong>{money(slice.amount)}</strong>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : <div className="liquidity-empty">No expenses assigned to this spend month yet.</div>}
+    </article>
+  );
+}
 
 declare global {
   interface Window {
@@ -270,6 +336,8 @@ export default function App() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [transactionCategories, setTransactionCategories] = useState<TransactionCategory[]>([]);
+  const [dashboardLiquidity, setDashboardLiquidity] = useState<DashboardLiquidity | null>(null);
+  const [liquidityLoading, setLiquidityLoading] = useState(false);
   const [dashboardMetrics, setDashboardMetrics] = useState<DashboardMetrics>({
     current_expendable_balance: null,
     current_total_credit_balance: 0,
@@ -444,6 +512,26 @@ export default function App() {
       cancelled = true;
     };
   }, [metricsRefreshKey, profile, selectedOverviewMonth, statisticsRange]);
+
+  useEffect(() => {
+    if (!profile) return;
+    let cancelled = false;
+    setLiquidityLoading(true);
+    const params = new URLSearchParams({ spend_month: getCurrentSpendMonth() });
+    api<DashboardLiquidity>(`/api/dashboard/liquidity?${params.toString()}`)
+      .then((liquidity) => {
+        if (!cancelled) setDashboardLiquidity(liquidity);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Could not load spend-month liquidity");
+      })
+      .finally(() => {
+        if (!cancelled) setLiquidityLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [metricsRefreshKey, profile]);
 
   useEffect(() => {
     if (profile?.role !== "admin" || activePage !== "administration" || adminSection !== "finance") return;
@@ -762,6 +850,34 @@ export default function App() {
       setMetricsRefreshKey((current) => current + 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save the expendable cash account");
+    }
+  }
+
+  async function saveCreditCardCycle(event: React.FormEvent<HTMLFormElement>, accountID: string) {
+    event.preventDefault();
+    setError("");
+    setNotice("");
+    const form = new FormData(event.currentTarget);
+    const statementCloseDay = Number(form.get("statement_close_day"));
+    const statementDueDay = Number(form.get("statement_due_day"));
+    if (!Number.isInteger(statementCloseDay) || statementCloseDay < 1 || statementCloseDay > 31 ||
+      !Number.isInteger(statementDueDay) || statementDueDay < 1 || statementDueDay > 31) {
+      setError("Statement close and due days must be between 1 and 31.");
+      return;
+    }
+    try {
+      await api("/api/admin/finance-settings/credit-card-cycle", {
+        method: "PUT",
+        body: JSON.stringify({
+          account_id: accountID,
+          statement_close_day: statementCloseDay,
+          statement_due_day: statementDueDay,
+        }),
+      });
+      setNotice("Credit card statement timing saved.");
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save credit card statement timing");
     }
   }
 
@@ -1695,6 +1811,30 @@ export default function App() {
 
                   <section className="panel settings-panel">
                     <div className="panel-heading">
+                      <div><h2>Credit card spend-month timing</h2><p>Set each card’s statement closing day and payment due day so purchases are assigned to the spend month when the payment affects cash liquidity.</p></div>
+                    </div>
+                    {accounts.filter((account) => account.type.toLowerCase() === "credit").length ? (
+                      accounts.filter((account) => account.type.toLowerCase() === "credit").map((account) => (
+                        <form className="profile-form finance-form credit-cycle-form" key={account.account_id} onSubmit={(event) => void saveCreditCardCycle(event, account.account_id)}>
+                          <div className="credit-cycle-account">
+                            <strong>{account.official_name || account.name}</strong>
+                            <span>{account.mask ? `···· ${account.mask}` : "Credit account"}{account.statement_close_day && account.statement_due_day ? " · Configured" : " · Not configured"}</span>
+                          </div>
+                          <label>Statement closes on day
+                            <input name="statement_close_day" type="number" min="1" max="31" defaultValue={account.statement_close_day ?? ""} required />
+                          </label>
+                          <label>Payment due on day
+                            <input name="statement_due_day" type="number" min="1" max="31" defaultValue={account.statement_due_day ?? ""} required />
+                          </label>
+                          <button className="secondary-button" type="submit">Save timing</button>
+                        </form>
+                      ))
+                    ) : <p className="finance-help">Connect a credit account to configure its statement timing.</p>}
+                    <p className="finance-help">For example, a card that closes on the 3rd and is due on the 1st will map Sep 4–Oct 3 purchases to the October spend month (Oct 4–Nov 3).</p>
+                  </section>
+
+                  <section className="panel settings-panel">
+                    <div className="panel-heading">
                       <div><h2>Credit card statement balances</h2><p>Plaid statement data is used where available; enter statements manually when it is not.</p></div>
                     </div>
                     <form className="profile-form finance-form" onSubmit={saveManualStatement}>
@@ -1909,6 +2049,26 @@ export default function App() {
             <div className="summary-foot">Selected spend month</div>
           </article>}
         </div>
+
+        <section className="panel liquidity-panel">
+          <div className="panel-heading">
+            <div><h2>Expenses affecting liquidity</h2><p>Category totals assigned to the current spend month and the next two spend months.</p></div>
+          </div>
+          {liquidityLoading && !dashboardLiquidity ? (
+            <div className="empty-state">Loading spend-month expenses…</div>
+          ) : dashboardLiquidity ? (
+            <>
+              <div className="liquidity-month-grid">
+                {dashboardLiquidity.months.map((month) => <SpendingPieChart key={month.spend_month} month={month} />)}
+              </div>
+              {dashboardLiquidity.unconfigured_credit_accounts.length > 0 && (
+                <p className="finance-help liquidity-help">
+                  Configure statement timing for {dashboardLiquidity.unconfigured_credit_accounts.join(", ")} in Administration → Financial management to include their credit purchases.
+                </p>
+              )}
+            </>
+          ) : <div className="empty-state">Spend-month expenses are unavailable.</div>}
+        </section>
 
         <section className="panel" id="accounts">
           <div className="panel-heading"><div><h2>Accounts</h2><p>Balances from your connected institutions</p></div></div>

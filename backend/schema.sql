@@ -108,6 +108,13 @@ CREATE TABLE IF NOT EXISTS credit_card_statements (
 
 CREATE INDEX IF NOT EXISTS credit_card_statements_due_date_idx ON credit_card_statements (due_date);
 
+CREATE TABLE IF NOT EXISTS credit_card_cycles (
+    account_id TEXT PRIMARY KEY REFERENCES accounts(account_id) ON DELETE CASCADE,
+    statement_close_day SMALLINT NOT NULL CHECK (statement_close_day BETWEEN 1 AND 31),
+    statement_due_day SMALLINT NOT NULL CHECK (statement_due_day BETWEEN 1 AND 31),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 UPDATE projected_expendable_income
 SET frozen_at = NOW()
 WHERE frozen_at IS NULL

@@ -84,11 +84,13 @@ func main() {
 	mux.Handle("GET /api/me/preferences", a.requireAuth(http.HandlerFunc(a.getPreferences)))
 	mux.Handle("PUT /api/me/preferences", a.requireAuth(http.HandlerFunc(a.updatePreferences)))
 	mux.Handle("GET /api/dashboard/metrics", a.requireAuth(http.HandlerFunc(a.getDashboardMetrics)))
+	mux.Handle("GET /api/dashboard/liquidity", a.requireAuth(http.HandlerFunc(a.getDashboardLiquidity)))
 	mux.Handle("GET /api/projections", a.requireAuth(http.HandlerFunc(a.getProjections)))
 	mux.Handle("PUT /api/admin/projections/settings", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.saveProjectionSettings))))
 	mux.Handle("PUT /api/admin/projections/expenses", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.saveScheduledProjectionExpenses))))
 	mux.Handle("GET /api/admin/finance-settings", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.getFinanceSettings))))
 	mux.Handle("PUT /api/admin/finance-settings/expendable-account", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.setExpendableCashAccount))))
+	mux.Handle("PUT /api/admin/finance-settings/credit-card-cycle", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.saveCreditCardCycle))))
 	mux.Handle("PUT /api/admin/finance-settings/credit-card-statement", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.saveCreditCardStatement))))
 	mux.Handle("DELETE /api/admin/finance-settings/credit-card-statement", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.deleteCreditCardStatement))))
 	mux.Handle("POST /api/me/password", a.requireAuth(http.HandlerFunc(a.changePassword)))
@@ -258,9 +260,11 @@ func (a *app) syncNow(w http.ResponseWriter, r *http.Request) {
 func (a *app) listAccounts(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.db.Query(r.Context(), `
 		SELECT accounts.account_id, accounts.name, accounts.official_name, accounts.mask, accounts.type,
-		       accounts.subtype, accounts.current_balance, accounts.iso_currency_code, plaid_items.demo_data
+		       accounts.subtype, accounts.current_balance, accounts.iso_currency_code, plaid_items.demo_data,
+		       cycle.statement_close_day, cycle.statement_due_day
 		FROM accounts
 		JOIN plaid_items USING (item_id)
+		LEFT JOIN credit_card_cycles cycle USING (account_id)
 		ORDER BY accounts.name`)
 	if err != nil {
 		log.Printf("query accounts: %v", err)
@@ -271,7 +275,7 @@ func (a *app) listAccounts(w http.ResponseWriter, r *http.Request) {
 	accounts := make([]account, 0)
 	for rows.Next() {
 		var item account
-		if err := rows.Scan(&item.AccountID, &item.Name, &item.OfficialName, &item.Mask, &item.Type, &item.Subtype, &item.CurrentBalance, &item.Currency, &item.DemoData); err != nil {
+		if err := rows.Scan(&item.AccountID, &item.Name, &item.OfficialName, &item.Mask, &item.Type, &item.Subtype, &item.CurrentBalance, &item.Currency, &item.DemoData, &item.StatementCloseDay, &item.StatementDueDay); err != nil {
 			log.Printf("scan account row: %v", err)
 			writeError(w, http.StatusInternalServerError, "could not load accounts")
 			return
@@ -740,15 +744,17 @@ func (a *app) runSyncWorker(ctx context.Context) {
 }
 
 type account struct {
-	AccountID      string   `json:"account_id"`
-	Name           string   `json:"name"`
-	OfficialName   *string  `json:"official_name"`
-	Mask           *string  `json:"mask"`
-	Type           string   `json:"type"`
-	Subtype        string   `json:"subtype"`
-	CurrentBalance *float64 `json:"current_balance"`
-	Currency       *string  `json:"iso_currency_code"`
-	DemoData       bool     `json:"demo_data"`
+	AccountID         string   `json:"account_id"`
+	Name              string   `json:"name"`
+	OfficialName      *string  `json:"official_name"`
+	Mask              *string  `json:"mask"`
+	Type              string   `json:"type"`
+	Subtype           string   `json:"subtype"`
+	CurrentBalance    *float64 `json:"current_balance"`
+	Currency          *string  `json:"iso_currency_code"`
+	DemoData          bool     `json:"demo_data"`
+	StatementCloseDay *int16   `json:"statement_close_day"`
+	StatementDueDay   *int16   `json:"statement_due_day"`
 }
 
 type transaction struct {

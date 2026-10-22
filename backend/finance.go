@@ -204,6 +204,49 @@ func (a *app) setExpendableCashAccount(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"saved": true})
 }
 
+func (a *app) saveCreditCardCycle(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		AccountID         string `json:"account_id"`
+		StatementCloseDay int    `json:"statement_close_day"`
+		StatementDueDay   int    `json:"statement_due_day"`
+	}
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON request")
+		return
+	}
+	accountID := strings.TrimSpace(input.AccountID)
+	if accountID == "" || input.StatementCloseDay < 1 || input.StatementCloseDay > 31 ||
+		input.StatementDueDay < 1 || input.StatementDueDay > 31 {
+		writeError(w, http.StatusBadRequest, "a credit account and valid statement close and due days are required")
+		return
+	}
+	var isCreditAccount bool
+	if err := a.db.QueryRow(r.Context(),
+		"SELECT EXISTS (SELECT 1 FROM accounts WHERE account_id = $1 AND type = 'credit')",
+		accountID).Scan(&isCreditAccount); err != nil {
+		log.Printf("validate credit card cycle account: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not validate credit account")
+		return
+	}
+	if !isCreditAccount {
+		writeError(w, http.StatusBadRequest, "selected account must be a credit account")
+		return
+	}
+	if _, err := a.db.Exec(r.Context(), `
+		INSERT INTO credit_card_cycles (account_id, statement_close_day, statement_due_day)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (account_id) DO UPDATE SET
+			statement_close_day = EXCLUDED.statement_close_day,
+			statement_due_day = EXCLUDED.statement_due_day,
+			updated_at = NOW()`,
+		accountID, input.StatementCloseDay, input.StatementDueDay); err != nil {
+		log.Printf("save credit card cycle: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not save credit card cycle")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"saved": true})
+}
+
 func (a *app) saveCreditCardStatement(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		AccountID        string   `json:"account_id"`
