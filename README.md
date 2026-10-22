@@ -13,7 +13,7 @@ A self-hosted personal finance app scaffold using Go, React, PostgreSQL, and Pla
 - The Overview heading opens a calendar-month selector; its history begins one year before first use in the browser and grows as new months arrive.
 - The dashboard's cash balance card totals depository accounts only.
 - Overview adds the administrator-selected expendable cash balance, total current credit balance, statement balances due in the selected statistics period, and projected expendable income for the selected spend month.
-- Administrators can configure the expendable cash account and current-cycle projection, which is frozen after the spend cycle ends on the 3rd. Credit statement data is fetched from Plaid Liabilities when authorized; statement balances can be entered manually when an institution or existing Plaid connection does not provide them.
+- Administrators can configure the expendable cash account and current-cycle projection, which is frozen after the spend cycle ends on the 3rd. Financial Management displays retrieved Plaid statement balances by account and due date; balances can also be entered manually when an institution or existing Plaid connection does not provide them.
 - Each profile can hide and reorder all eight Overview summary cards from the Filter drawer.
 - Dashboard filters and summary-card preferences open in a slide-in drawer from the right.
 - Assigning a category creates a reusable rule that updates similar existing transactions and applies to future syncs. Expense rules match the normalized first three merchant/description words; income rules match the normalized first three transaction-name words on the same account.

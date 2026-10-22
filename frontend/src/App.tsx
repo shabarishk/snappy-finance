@@ -41,6 +41,7 @@ type ManualCreditStatement = {
   account_id: string;
   account_name: string;
   due_date: string;
+  statement_date: string | null;
   statement_balance: number;
 };
 
@@ -49,6 +50,7 @@ type FinanceSettings = {
   current_spend_month_start: string;
   projected_expendable_income: number | null;
   manual_statements: ManualCreditStatement[];
+  plaid_statements: ManualCreditStatement[];
 };
 
 type Account = {
@@ -1174,6 +1176,18 @@ export default function App() {
                       <label>Statement balance<input type="number" min="0" step="0.01" value={statementBalanceInput} onChange={(event) => setStatementBalanceInput(event.target.value)} required /></label>
                       <button className="primary-button" type="submit" disabled={!accounts.some((account) => account.type.toLowerCase() === "credit")}>Save statement</button>
                     </form>
+                    <div className="manual-statement-list">
+                      <h3>Plaid-retrieved statements</h3>
+                      {financeSettings?.plaid_statements.length ? financeSettings.plaid_statements.map((statement) => (
+                        <div className="manual-statement-row" key={`${statement.account_id}-${statement.due_date}`}>
+                          <div>
+                            <strong>{statement.account_name}</strong>
+                            <span>{statement.statement_date ? `Statement ${new Date(`${statement.statement_date.slice(0, 10)}T00:00:00`).toLocaleDateString()} · ` : ""}Due {new Date(`${statement.due_date.slice(0, 10)}T00:00:00`).toLocaleDateString()}</span>
+                          </div>
+                          <strong>{money(statement.statement_balance)}</strong>
+                        </div>
+                      )) : <p className="finance-help">No statement balances have been retrieved from Plaid yet.</p>}
+                    </div>
                     <div className="manual-statement-list">
                       <h3>Manual entries</h3>
                       {financeSettings?.manual_statements.length ? financeSettings.manual_statements.map((statement) => (

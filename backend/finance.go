@@ -15,11 +15,12 @@ type dashboardMetrics struct {
 	ProjectedExpendableIncome *float64 `json:"projected_expendable_income"`
 }
 
-type manualCreditStatement struct {
-	AccountID        string    `json:"account_id"`
-	AccountName      string    `json:"account_name"`
-	DueDate          time.Time `json:"due_date"`
-	StatementBalance float64   `json:"statement_balance"`
+type creditCardStatement struct {
+	AccountID        string     `json:"account_id"`
+	AccountName      string     `json:"account_name"`
+	DueDate          time.Time  `json:"due_date"`
+	StatementDate    *time.Time `json:"statement_date"`
+	StatementBalance float64    `json:"statement_balance"`
 }
 
 func (a *app) getDashboardMetrics(w http.ResponseWriter, r *http.Request) {
@@ -96,10 +97,11 @@ func (a *app) getFinanceSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var response struct {
-		ExpendableCashAccountID   *string                 `json:"expendable_cash_account_id"`
-		CurrentSpendMonthStart    time.Time               `json:"current_spend_month_start"`
-		ProjectedExpendableIncome *float64                `json:"projected_expendable_income"`
-		ManualStatements          []manualCreditStatement `json:"manual_statements"`
+		ExpendableCashAccountID   *string               `json:"expendable_cash_account_id"`
+		CurrentSpendMonthStart    time.Time             `json:"current_spend_month_start"`
+		ProjectedExpendableIncome *float64              `json:"projected_expendable_income"`
+		ManualStatements          []creditCardStatement `json:"manual_statements"`
+		PlaidStatements           []creditCardStatement `json:"plaid_statements"`
 	}
 	err := a.db.QueryRow(r.Context(), `
 		SELECT settings.expendable_cash_account_id,
@@ -122,31 +124,45 @@ func (a *app) getFinanceSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.ManualStatements = make([]manualCreditStatement, 0)
+	response.ManualStatements = make([]creditCardStatement, 0)
+	response.PlaidStatements = make([]creditCardStatement, 0)
 	rows, err := a.db.Query(r.Context(), `
-		SELECT statement.account_id, account.name, statement.due_date, statement.statement_balance
+		SELECT statement.account_id, COALESCE(account.official_name, account.name),
+			statement.due_date, statement.statement_date, statement.statement_balance, statement.source
 		FROM credit_card_statements statement
 		JOIN accounts account ON account.account_id = statement.account_id
-		WHERE statement.source = 'manual'
 		ORDER BY statement.due_date DESC, account.name`)
 	if err != nil {
-		log.Printf("read manual credit card statements: %v", err)
-		writeError(w, http.StatusInternalServerError, "could not load manual statement entries")
+		log.Printf("read credit card statements: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load credit card statements")
 		return
 	}
-	defer rows.Close()
 	for rows.Next() {
-		var statement manualCreditStatement
-		if err := rows.Scan(&statement.AccountID, &statement.AccountName, &statement.DueDate, &statement.StatementBalance); err != nil {
-			log.Printf("scan manual credit card statement: %v", err)
-			writeError(w, http.StatusInternalServerError, "could not load manual statement entries")
+		var statement creditCardStatement
+		var source string
+		if err := rows.Scan(
+			&statement.AccountID,
+			&statement.AccountName,
+			&statement.DueDate,
+			&statement.StatementDate,
+			&statement.StatementBalance,
+			&source,
+		); err != nil {
+			rows.Close()
+			log.Printf("scan credit card statement: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not load credit card statements")
 			return
 		}
-		response.ManualStatements = append(response.ManualStatements, statement)
+		if source == "plaid" {
+			response.PlaidStatements = append(response.PlaidStatements, statement)
+		} else {
+			response.ManualStatements = append(response.ManualStatements, statement)
+		}
 	}
+	rows.Close()
 	if err := rows.Err(); err != nil {
-		log.Printf("read manual credit card statements: %v", err)
-		writeError(w, http.StatusInternalServerError, "could not load manual statement entries")
+		log.Printf("read credit card statements: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load credit card statements")
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
