@@ -86,9 +86,15 @@ CREATE TABLE IF NOT EXISTS scheduled_projection_expenses (
     expense_id BIGSERIAL PRIMARY KEY,
     name TEXT NOT NULL CHECK (LENGTH(BTRIM(name)) BETWEEN 1 AND 100),
     amount NUMERIC(18, 4) NOT NULL CHECK (amount >= 0),
-    frequency TEXT NOT NULL CHECK (frequency IN ('weekly', 'monthly', 'bimonthly', 'annual')),
+    frequency TEXT NOT NULL CHECK (frequency IN ('one_time', 'weekly', 'monthly', 'bimonthly', 'annual')),
     first_due_date DATE NOT NULL
 );
+
+ALTER TABLE scheduled_projection_expenses
+    DROP CONSTRAINT IF EXISTS scheduled_projection_expenses_frequency_check;
+ALTER TABLE scheduled_projection_expenses
+    ADD CONSTRAINT scheduled_projection_expenses_frequency_check
+    CHECK (frequency IN ('one_time', 'weekly', 'monthly', 'bimonthly', 'annual'));
 
 CREATE TABLE IF NOT EXISTS credit_card_statements (
     account_id TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,

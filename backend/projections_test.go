@@ -78,6 +78,22 @@ func TestScheduledExpenseFrequencyOccurrences(t *testing.T) {
 			want:      []string{"2026-10-10"},
 		},
 		{
+			name:      "one-time inside cycle",
+			frequency: "one_time",
+			firstDue:  "2026-10-20",
+			start:     "2026-10-04",
+			end:       "2026-11-03",
+			want:      []string{"2026-10-20"},
+		},
+		{
+			name:      "one-time before cycle does not recur",
+			frequency: "one_time",
+			firstDue:  "2026-10-03",
+			start:     "2026-10-04",
+			end:       "2026-11-03",
+			want:      []string{},
+		},
+		{
 			name:      "monthly date clamped to last day",
 			frequency: "monthly",
 			firstDue:  "2026-01-31",

@@ -293,9 +293,9 @@ func (a *app) saveScheduledProjectionExpenses(w http.ResponseWriter, r *http.Req
 			return
 		}
 		switch expense.Frequency {
-		case "weekly", "monthly", "bimonthly", "annual":
+		case "one_time", "weekly", "monthly", "bimonthly", "annual":
 		default:
-			writeError(w, http.StatusBadRequest, "scheduled expense frequency must be weekly, monthly, bimonthly, or annual")
+			writeError(w, http.StatusBadRequest, "scheduled expense frequency must be one_time, weekly, monthly, bimonthly, or annual")
 			return
 		}
 		if _, err := time.Parse("2006-01-02", expense.FirstDueDate); err != nil {
@@ -657,6 +657,12 @@ func scheduledExpenseDueDates(frequency string, firstDue, periodStart, periodEnd
 	periodStart = dateOnly(periodStart)
 	periodEnd = dateOnly(periodEnd)
 	if firstDue.After(periodEnd) || periodEnd.Before(periodStart) {
+		return nil
+	}
+	if frequency == "one_time" {
+		if !firstDue.Before(periodStart) {
+			return []time.Time{firstDue}
+		}
 		return nil
 	}
 	if frequency == "weekly" {

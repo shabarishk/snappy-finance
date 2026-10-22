@@ -67,7 +67,7 @@ type WifePayProjection = {
   amount: number | null;
 };
 
-type ScheduledExpenseFrequency = "weekly" | "monthly" | "bimonthly" | "annual";
+type ScheduledExpenseFrequency = "one_time" | "weekly" | "monthly" | "bimonthly" | "annual";
 
 type ScheduledExpense = {
   expense_id: number;
@@ -1189,7 +1189,7 @@ export default function App() {
 
               <div className="projection-rates">
                 <div className="projection-section-heading">
-                  <h3>Wife’s net pay by workdays in a 15-day period</h3>
+                  <h3>Jan’s net pay by workdays in a 15-day period</h3>
                   <span>One shared amount table is used for both half-month periods.</span>
                 </div>
                 <div className="projection-rate-grid">
@@ -1267,7 +1267,7 @@ export default function App() {
                 <div className="empty-state compact">Loading scheduled expenses…</div>
               ) : (
                 <form className="projection-settings-form" onSubmit={saveScheduledExpenses}>
-                  <p className="projection-help">Each schedule starts on its first due date. Weekly expenses repeat every 7 days; monthly, every-two-months, and annual expenses follow that date’s calendar day.</p>
+                  <p className="projection-help">Each schedule starts on its first due date. One-time expenses occur once; weekly repeats every 7 days, and monthly, every-two-months, and annual schedules follow that date’s calendar day.</p>
                   {scheduledExpenseDrafts.length > 0 ? (
                     <div className="scheduled-expense-list">
                       {scheduledExpenseDrafts.map((expense) => (
@@ -1296,6 +1296,7 @@ export default function App() {
                               value={expense.frequency}
                               onChange={(event) => setScheduledExpenseDrafts((current) => current.map((item) => item.key === expense.key ? { ...item, frequency: event.target.value as ScheduledExpenseFrequency } : item))}
                             >
+                              <option value="one_time">One time</option>
                               <option value="weekly">Weekly</option>
                               <option value="monthly">Monthly</option>
                               <option value="bimonthly">Bimonthly (every 2 months)</option>
@@ -1386,28 +1387,28 @@ export default function App() {
                     <strong>−{money(period.scheduled_expense_total)}</strong>
                   </div>
                 )}
-                <div className="projection-breakdown">
-                  <div><span>Your biweekly pay</span><strong>{money(period.your_pay_total)}</strong></div>
-                  <div><span>Wife’s pay</span><strong>{money(period.wife_pay_total)}</strong></div>
-                </div>
-                {period.your_pay_total === null && <p className="projection-warning">Enter your net pay and a payday anchor to calculate your portion.</p>}
+                {period.your_pay_total === null && <p className="projection-warning">Enter Saby’s net pay and a payday anchor to calculate this portion.</p>}
                 {period.missing_workday_counts.length > 0 && (
-                  <p className="projection-warning">Missing wife’s pay rate{period.missing_workday_counts.length === 1 ? "" : "s"} for {period.missing_workday_counts.join(", ")} workday{period.missing_workday_counts.length === 1 ? "" : "s"}.</p>
+                  <p className="projection-warning">Missing Jan’s pay rate{period.missing_workday_counts.length === 1 ? "" : "s"} for {period.missing_workday_counts.join(", ")} workday{period.missing_workday_counts.length === 1 ? "" : "s"}.</p>
                 )}
                 <details className="projection-pay-details">
                   <summary>Details</summary>
                   <div className="projection-details-grid">
                     <section className="projection-detail-column">
                       <h4>Income deposits</h4>
+                      <div className="projection-income-totals">
+                        <div><span>Saby’s pay</span><strong>{money(period.your_pay_total)}</strong></div>
+                        <div><span>Jan’s pay</span><strong>{money(period.wife_pay_total)}</strong></div>
+                      </div>
                       {period.your_pay_periods.map((payPeriod) => (
                         <div className="projection-pay-period" key={`your-${payPeriod.pay_date}`}>
-                          <span>Your pay · {displayDate(payPeriod.pay_date)}</span>
+                          <span>Saby’s pay · {displayDate(payPeriod.pay_date)}</span>
                           <strong>{money(payPeriod.amount)}</strong>
                         </div>
                       ))}
                       {period.wife_pay_periods.map((payPeriod) => (
                         <div className="projection-pay-period" key={`wife-${payPeriod.pay_date}-${payPeriod.work_period_start}`}>
-                          <span>Wife’s pay · {displayDate(payPeriod.pay_date)} · worked {displayDate(payPeriod.work_period_start)}–{displayDate(payPeriod.work_period_end)} ({payPeriod.workdays} days)</span>
+                          <span>Jan’s pay · {displayDate(payPeriod.pay_date)} · worked {displayDate(payPeriod.work_period_start)}–{displayDate(payPeriod.work_period_end)} ({payPeriod.workdays} days)</span>
                           <strong>{money(payPeriod.amount)}</strong>
                         </div>
                       ))}
