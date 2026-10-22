@@ -67,19 +67,53 @@ type WifePayProjection = {
   amount: number | null;
 };
 
+type ScheduledExpenseFrequency = "weekly" | "monthly" | "bimonthly" | "annual";
+
+type ScheduledExpense = {
+  expense_id: number;
+  name: string;
+  amount: number;
+  frequency: ScheduledExpenseFrequency;
+  first_due_date: string;
+};
+
+type ScheduledExpenseDraft = {
+  key: string;
+  name: string;
+  amount: string;
+  frequency: ScheduledExpenseFrequency;
+  first_due_date: string;
+};
+
+type ScheduledExpenseOccurrence = {
+  expense_id: number;
+  name: string;
+  due_date: string;
+  amount: number;
+};
+
+type ProjectionDeposit = {
+  pay_date: string;
+  amount: number;
+};
+
 type IncomeProjectionPeriod = {
   spend_month_start: string;
   spend_month_end: string;
   your_pay_total: number | null;
+  your_pay_periods: ProjectionDeposit[];
   wife_pay_total: number | null;
   projected_expendable_income: number | null;
   wife_pay_periods: WifePayProjection[];
   missing_workday_counts: number[];
+  scheduled_expense_total: number;
+  scheduled_expenses: ScheduledExpenseOccurrence[];
 };
 
 type ProjectionData = {
   settings: ProjectionSettings;
   federal_holiday_options: { id: string; label: string }[];
+  expenses: ScheduledExpense[];
   periods: IncomeProjectionPeriod[];
 };
 
@@ -222,6 +256,8 @@ export default function App() {
   const [transactionPageSize, setTransactionPageSize] = useState(25);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [dashboardPreferencesOpen, setDashboardPreferencesOpen] = useState(false);
+  const [projectionAssumptionsOpen, setProjectionAssumptionsOpen] = useState(false);
+  const [scheduledExpensesOpen, setScheduledExpensesOpen] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [hiddenCards, setHiddenCards] = useState<string[]>([]);
@@ -256,6 +292,7 @@ export default function App() {
   const [selectedFederalHolidays, setSelectedFederalHolidays] = useState<string[]>([]);
   const [projectionDaysOff, setProjectionDaysOff] = useState<string[]>([]);
   const [newProjectionDayOff, setNewProjectionDayOff] = useState("");
+  const [scheduledExpenseDrafts, setScheduledExpenseDrafts] = useState<ScheduledExpenseDraft[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -275,6 +312,8 @@ export default function App() {
 
   useEffect(() => {
     if (activePage !== "overview") setDashboardPreferencesOpen(false);
+    if (activePage !== "projections") setProjectionAssumptionsOpen(false);
+    if (activePage !== "projections") setScheduledExpensesOpen(false);
   }, [activePage]);
 
   useEffect(() => {
@@ -313,11 +352,13 @@ export default function App() {
   }, [monthPickerOpen]);
 
   useEffect(() => {
-    if (!sidebarOpen && !dashboardPreferencesOpen) return;
+    if (!sidebarOpen && !dashboardPreferencesOpen && !projectionAssumptionsOpen && !scheduledExpensesOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setSidebarOpen(false);
         setDashboardPreferencesOpen(false);
+        setProjectionAssumptionsOpen(false);
+        setScheduledExpensesOpen(false);
       }
     };
     const previousOverflow = document.body.style.overflow;
@@ -327,12 +368,14 @@ export default function App() {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [dashboardPreferencesOpen, sidebarOpen]);
+  }, [dashboardPreferencesOpen, projectionAssumptionsOpen, scheduledExpensesOpen, sidebarOpen]);
 
   function navigateToPage(page: "overview" | "administration" | "transactions" | "projections") {
     setActivePage(page);
     setSidebarOpen(false);
     setDashboardPreferencesOpen(false);
+    setProjectionAssumptionsOpen(false);
+    setScheduledExpensesOpen(false);
     setMonthPickerOpen(false);
     if (window.location.hash !== `#${page}`) window.location.hash = page;
   }
@@ -441,6 +484,13 @@ export default function App() {
         ));
         setSelectedFederalHolidays(data.settings.federal_holidays);
         setProjectionDaysOff(data.settings.days_off.map((date) => date.slice(0, 10)));
+        setScheduledExpenseDrafts(data.expenses.map((expense) => ({
+          key: String(expense.expense_id),
+          name: expense.name,
+          amount: expense.amount.toString(),
+          frequency: expense.frequency,
+          first_due_date: expense.first_due_date.slice(0, 10),
+        })));
       })
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err.message : "Could not load income projections");
@@ -753,11 +803,13 @@ export default function App() {
           days_off: projectionDaysOff,
         }),
       });
-      setNotice("Projection assumptions saved.");
+      setNotice("Income assumptions saved.");
       setProjectionRefreshKey((current) => current + 1);
       setMetricsRefreshKey((current) => current + 1);
+      setProjectionAssumptionsOpen(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save projection assumptions");
+      setProjectionAssumptionsOpen(false);
     }
   }
 
@@ -765,6 +817,51 @@ export default function App() {
     if (!newProjectionDayOff || projectionDaysOff.includes(newProjectionDayOff)) return;
     setProjectionDaysOff((current) => [...current, newProjectionDayOff].sort());
     setNewProjectionDayOff("");
+  }
+
+  function addScheduledExpenseDraft() {
+    setScheduledExpenseDrafts((current) => [
+      ...current,
+      {
+        key: crypto.randomUUID(),
+        name: "",
+        amount: "",
+        frequency: "monthly",
+        first_due_date: transactionDateKey(new Date()),
+      },
+    ]);
+  }
+
+  async function saveScheduledExpenses(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    setNotice("");
+    const expenses: Omit<ScheduledExpense, "expense_id">[] = [];
+    for (const expense of scheduledExpenseDrafts) {
+      const name = expense.name.trim();
+      const amount = Number(expense.amount);
+      if (!name || name.length > 100 || !expense.first_due_date || !Number.isFinite(amount) || amount < 0) {
+        setError("Enter a category, valid non-negative amount, and first due date for every scheduled expense.");
+        return;
+      }
+      expenses.push({
+        name,
+        amount,
+        frequency: expense.frequency,
+        first_due_date: expense.first_due_date,
+      });
+    }
+    try {
+      await api("/api/admin/projections/expenses", {
+        method: "PUT",
+        body: JSON.stringify({ expenses }),
+      });
+      setNotice("Scheduled expenses saved.");
+      setProjectionRefreshKey((current) => current + 1);
+      setScheduledExpensesOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save scheduled expenses");
+    }
   }
 
   async function saveManualStatement(event: React.FormEvent<HTMLFormElement>) {
@@ -1013,6 +1110,7 @@ export default function App() {
       setWifePayRates({});
       setSelectedFederalHolidays([]);
       setProjectionDaysOff([]);
+      setScheduledExpenseDrafts([]);
       setDashboardMetrics({
         current_expendable_balance: null,
         current_total_credit_balance: 0,
@@ -1027,14 +1125,37 @@ export default function App() {
   const projectionsPanel = (
     <>
       {profile?.role === "admin" && (
-        <section className="panel projection-settings-panel">
-          <div className="panel-heading">
-            <div><h2>Projection assumptions</h2><p>Enter take-home pay and schedule details to calculate income for the current spend cycle and the next 12 cycles.</p></div>
-          </div>
-          {projectionLoading && !projectionData ? (
-            <div className="empty-state compact">Loading projection settings…</div>
-          ) : (
-            <form className="projection-settings-form" onSubmit={saveProjectionSettings}>
+        <>
+          <button
+            type="button"
+            className={`dashboard-preferences-backdrop ${projectionAssumptionsOpen ? "visible" : ""}`}
+            aria-label="Close income assumptions"
+            aria-hidden={!projectionAssumptionsOpen}
+            tabIndex={projectionAssumptionsOpen ? 0 : -1}
+            onClick={() => setProjectionAssumptionsOpen(false)}
+          />
+          <aside
+            id="projection-assumptions"
+            className={`dashboard-preferences-drawer projection-assumptions-drawer ${projectionAssumptionsOpen ? "open" : ""}`}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="projection-assumptions-title"
+            aria-hidden={!projectionAssumptionsOpen}
+          >
+            <section className="panel settings-panel projection-assumptions-drawer-panel">
+              <div className="panel-heading preferences-drawer-heading">
+                <div><h2 id="projection-assumptions-title">Income assumptions</h2><p>Enter take-home pay and schedule details to calculate income for the current spend cycle and the next 12 cycles.</p></div>
+                <button
+                  type="button"
+                  className="preferences-drawer-close"
+                  aria-label="Close income assumptions"
+                  onClick={() => setProjectionAssumptionsOpen(false)}
+                ><X size={18} /></button>
+              </div>
+              {projectionLoading && !projectionData ? (
+                <div className="empty-state compact">Loading projection settings…</div>
+              ) : (
+                <form className="projection-settings-form" onSubmit={saveProjectionSettings}>
               <div className="projection-pay-inputs">
                 <label>Your fixed net biweekly pay
                   <input type="number" min="0" step="0.01" value={projectionPayAmount} onChange={(event) => setProjectionPayAmount(event.target.value)} required />
@@ -1110,16 +1231,140 @@ export default function App() {
                 ) : <p className="projection-help">No planned days off entered.</p>}
               </div>
               <div className="projection-save-row">
-                <button className="primary-button" type="submit">Save projection assumptions</button>
+                <button className="primary-button" type="submit">Save income assumptions</button>
               </div>
-            </form>
-          )}
-        </section>
+                </form>
+              )}
+            </section>
+          </aside>
+          <button
+            type="button"
+            className={`dashboard-preferences-backdrop ${scheduledExpensesOpen ? "visible" : ""}`}
+            aria-label="Close scheduled expenses"
+            aria-hidden={!scheduledExpensesOpen}
+            tabIndex={scheduledExpensesOpen ? 0 : -1}
+            onClick={() => setScheduledExpensesOpen(false)}
+          />
+          <aside
+            id="scheduled-expenses"
+            className={`dashboard-preferences-drawer scheduled-expenses-drawer ${scheduledExpensesOpen ? "open" : ""}`}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="scheduled-expenses-title"
+            aria-hidden={!scheduledExpensesOpen}
+          >
+            <section className="panel settings-panel scheduled-expenses-drawer-panel">
+              <div className="panel-heading preferences-drawer-heading">
+                <div><h2 id="scheduled-expenses-title">Scheduled expenses</h2><p>Create recurring expense categories and assign each an amount, frequency, and first due date.</p></div>
+                <button
+                  type="button"
+                  className="preferences-drawer-close"
+                  aria-label="Close scheduled expenses"
+                  onClick={() => setScheduledExpensesOpen(false)}
+                ><X size={18} /></button>
+              </div>
+              {projectionLoading && !projectionData ? (
+                <div className="empty-state compact">Loading scheduled expenses…</div>
+              ) : (
+                <form className="projection-settings-form" onSubmit={saveScheduledExpenses}>
+                  <p className="projection-help">Each schedule starts on its first due date. Weekly expenses repeat every 7 days; monthly, every-two-months, and annual expenses follow that date’s calendar day.</p>
+                  {scheduledExpenseDrafts.length > 0 ? (
+                    <div className="scheduled-expense-list">
+                      {scheduledExpenseDrafts.map((expense) => (
+                        <div className="scheduled-expense-editor" key={expense.key}>
+                          <label>Expense category
+                            <input
+                              type="text"
+                              maxLength={100}
+                              value={expense.name}
+                              onChange={(event) => setScheduledExpenseDrafts((current) => current.map((item) => item.key === expense.key ? { ...item, name: event.target.value } : item))}
+                              required
+                            />
+                          </label>
+                          <label>Amount
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={expense.amount}
+                              onChange={(event) => setScheduledExpenseDrafts((current) => current.map((item) => item.key === expense.key ? { ...item, amount: event.target.value } : item))}
+                              required
+                            />
+                          </label>
+                          <label>Frequency
+                            <select
+                              value={expense.frequency}
+                              onChange={(event) => setScheduledExpenseDrafts((current) => current.map((item) => item.key === expense.key ? { ...item, frequency: event.target.value as ScheduledExpenseFrequency } : item))}
+                            >
+                              <option value="weekly">Weekly</option>
+                              <option value="monthly">Monthly</option>
+                              <option value="bimonthly">Bimonthly (every 2 months)</option>
+                              <option value="annual">Annual</option>
+                            </select>
+                          </label>
+                          <label>First due date
+                            <input
+                              type="date"
+                              value={expense.first_due_date}
+                              onChange={(event) => setScheduledExpenseDrafts((current) => current.map((item) => item.key === expense.key ? { ...item, first_due_date: event.target.value } : item))}
+                              required
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            className="secondary-button scheduled-expense-remove"
+                            aria-label={`Remove ${expense.name || "scheduled expense"}`}
+                            onClick={() => setScheduledExpenseDrafts((current) => current.filter((item) => item.key !== expense.key))}
+                          >Remove</button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="projection-help">No scheduled expenses. Add one to include recurring bills in the forecast.</p>
+                  )}
+                  <div className="projection-save-row scheduled-expense-actions">
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={addScheduledExpenseDraft}
+                      disabled={scheduledExpenseDrafts.length >= 200}
+                    >Add expense</button>
+                    <button className="primary-button" type="submit">Save scheduled expenses</button>
+                  </div>
+                </form>
+              )}
+            </section>
+          </aside>
+        </>
       )}
 
       <section className="panel projections-panel">
         <div className="panel-heading">
           <div><h2>Projected expendable income</h2><p>Automatic take-home pay forecast by spend cycle (4th–3rd), including the current cycle and the next 12.</p></div>
+          {profile?.role === "admin" && (
+            <div className="projection-drawer-actions">
+              <button
+                type="button"
+                className="secondary-button projection-assumptions-button"
+                aria-expanded={projectionAssumptionsOpen}
+                aria-controls="projection-assumptions"
+                onClick={() => {
+                  setScheduledExpensesOpen(false);
+                  setProjectionAssumptionsOpen(true);
+                }}
+              ><Filter size={16} /> Income assumptions</button>
+              <button
+                type="button"
+                className="secondary-button projection-assumptions-button"
+                aria-expanded={scheduledExpensesOpen}
+                aria-controls="scheduled-expenses"
+                onClick={() => {
+                  setProjectionAssumptionsOpen(false);
+                  setScheduledExpensesOpen(true);
+                }}
+              ><Filter size={16} /> Scheduled expenses</button>
+            </div>
+          )}
         </div>
         {projectionLoading && !projectionData ? (
           <div className="empty-state">Calculating projections…</div>
@@ -1135,6 +1380,12 @@ export default function App() {
                     {period.projected_expendable_income === null ? "Incomplete" : money(period.projected_expendable_income)}
                   </strong>
                 </div>
+                {period.scheduled_expenses.length > 0 && (
+                  <div className="projection-scheduled-total">
+                    <span>Scheduled expenses</span>
+                    <strong>−{money(period.scheduled_expense_total)}</strong>
+                  </div>
+                )}
                 <div className="projection-breakdown">
                   <div><span>Your biweekly pay</span><strong>{money(period.your_pay_total)}</strong></div>
                   <div><span>Wife’s pay</span><strong>{money(period.wife_pay_total)}</strong></div>
@@ -1143,17 +1394,46 @@ export default function App() {
                 {period.missing_workday_counts.length > 0 && (
                   <p className="projection-warning">Missing wife’s pay rate{period.missing_workday_counts.length === 1 ? "" : "s"} for {period.missing_workday_counts.join(", ")} workday{period.missing_workday_counts.length === 1 ? "" : "s"}.</p>
                 )}
-                {period.wife_pay_periods.length > 0 && (
-                  <details className="projection-pay-details">
-                    <summary>Wife’s deposits and workday counts</summary>
-                    {period.wife_pay_periods.map((payPeriod) => (
-                      <div className="projection-pay-period" key={`${payPeriod.pay_date}-${payPeriod.work_period_start}`}>
-                        <span>Paid {displayDate(payPeriod.pay_date)} · worked {displayDate(payPeriod.work_period_start)}–{displayDate(payPeriod.work_period_end)} ({payPeriod.workdays} days)</span>
-                        <strong>{money(payPeriod.amount)}</strong>
-                      </div>
-                    ))}
-                  </details>
-                )}
+                <details className="projection-pay-details">
+                  <summary>Details</summary>
+                  <div className="projection-details-grid">
+                    <section className="projection-detail-column">
+                      <h4>Income deposits</h4>
+                      {period.your_pay_periods.map((payPeriod) => (
+                        <div className="projection-pay-period" key={`your-${payPeriod.pay_date}`}>
+                          <span>Your pay · {displayDate(payPeriod.pay_date)}</span>
+                          <strong>{money(payPeriod.amount)}</strong>
+                        </div>
+                      ))}
+                      {period.wife_pay_periods.map((payPeriod) => (
+                        <div className="projection-pay-period" key={`wife-${payPeriod.pay_date}-${payPeriod.work_period_start}`}>
+                          <span>Wife’s pay · {displayDate(payPeriod.pay_date)} · worked {displayDate(payPeriod.work_period_start)}–{displayDate(payPeriod.work_period_end)} ({payPeriod.workdays} days)</span>
+                          <strong>{money(payPeriod.amount)}</strong>
+                        </div>
+                      ))}
+                      {period.your_pay_periods.length === 0 && period.wife_pay_periods.length === 0 && (
+                        <p className="projection-detail-empty">No income deposits are scheduled for this cycle.</p>
+                      )}
+                    </section>
+                    <section className="projection-detail-column">
+                      <h4>Scheduled expenses</h4>
+                      {period.scheduled_expenses.map((expense) => (
+                        <div className="projection-pay-period projection-expense-detail" key={`${expense.expense_id}-${expense.due_date}`}>
+                          <span>{expense.name} · due {displayDate(expense.due_date)}</span>
+                          <strong>{money(expense.amount)}</strong>
+                        </div>
+                      ))}
+                      {period.scheduled_expenses.length === 0 ? (
+                        <p className="projection-detail-empty">No scheduled expenses are due this cycle.</p>
+                      ) : (
+                        <div className="projection-expense-detail-total">
+                          <span>Total scheduled expenses</span>
+                          <strong>−{money(period.scheduled_expense_total)}</strong>
+                        </div>
+                      )}
+                    </section>
+                  </div>
+                </details>
               </article>
             ))}
           </div>

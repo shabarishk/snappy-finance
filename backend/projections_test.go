@@ -27,12 +27,116 @@ func TestSpendCycleStart(t *testing.T) {
 
 func TestCalculateIncomeProjectionsIncludesCurrentAndNextTwelveCycles(t *testing.T) {
 	today := time.Date(2026, time.October, 21, 0, 0, 0, 0, time.UTC)
-	periods := calculateIncomeProjections(projectionSettings{}, today)
+	periods := calculateIncomeProjections(projectionSettings{}, nil, today)
 	if len(periods) != 13 {
 		t.Fatalf("projection periods = %d, want current plus 12 future cycles", len(periods))
 	}
 	if periods[0].SpendMonthStart != "2026-10-04" || periods[12].SpendMonthStart != "2027-10-04" {
 		t.Fatalf("projection window = %s through %s, want 2026-10-04 through 2027-10-04", periods[0].SpendMonthStart, periods[12].SpendMonthStart)
+	}
+}
+
+func TestScheduledExpenseFrequencyOccurrences(t *testing.T) {
+	tests := []struct {
+		name      string
+		frequency string
+		firstDue  string
+		start     string
+		end       string
+		want      []string
+	}{
+		{
+			name:      "weekly",
+			frequency: "weekly",
+			firstDue:  "2026-10-05",
+			start:     "2026-10-04",
+			end:       "2026-11-03",
+			want:      []string{"2026-10-05", "2026-10-12", "2026-10-19", "2026-10-26", "2026-11-02"},
+		},
+		{
+			name:      "monthly",
+			frequency: "monthly",
+			firstDue:  "2026-01-31",
+			start:     "2026-02-04",
+			end:       "2026-03-03",
+			want:      []string{"2026-02-28"},
+		},
+		{
+			name:      "every two months",
+			frequency: "bimonthly",
+			firstDue:  "2026-10-15",
+			start:     "2026-11-04",
+			end:       "2027-01-03",
+			want:      []string{"2026-12-15"},
+		},
+		{
+			name:      "annual",
+			frequency: "annual",
+			firstDue:  "2025-10-10",
+			start:     "2026-10-04",
+			end:       "2026-11-03",
+			want:      []string{"2026-10-10"},
+		},
+		{
+			name:      "monthly date clamped to last day",
+			frequency: "monthly",
+			firstDue:  "2026-01-31",
+			start:     "2026-03-04",
+			end:       "2026-04-03",
+			want:      []string{"2026-03-31"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			firstDue, err := time.Parse("2006-01-02", test.firstDue)
+			if err != nil {
+				t.Fatal(err)
+			}
+			start, err := time.Parse("2006-01-02", test.start)
+			if err != nil {
+				t.Fatal(err)
+			}
+			end, err := time.Parse("2006-01-02", test.end)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := scheduledExpenseDueDates(test.frequency, firstDue, start, end)
+			gotStrings := make([]string, len(got))
+			for index, date := range got {
+				gotStrings[index] = date.Format("2006-01-02")
+			}
+			if len(gotStrings) != len(test.want) {
+				t.Fatalf("occurrences = %v, want %v", gotStrings, test.want)
+			}
+			for index := range test.want {
+				if gotStrings[index] != test.want[index] {
+					t.Fatalf("occurrences = %v, want %v", gotStrings, test.want)
+				}
+			}
+		})
+	}
+}
+
+func TestIncomeProjectionIncludesPayDatesAndScheduledExpenseTotal(t *testing.T) {
+	amount := 2000.0
+	anchor := "2026-10-08"
+	settings := projectionSettings{
+		BiweeklyPayAmount:    &amount,
+		BiweeklyPaydayAnchor: &anchor,
+	}
+	period := calculateIncomeProjection(settings, time.Date(2026, time.October, 4, 0, 0, 0, 0, time.UTC))
+	applyScheduledExpenses(&period, []scheduledExpense{
+		{ID: 1, Name: "Mortgage payment", Amount: 1500, Frequency: "monthly", FirstDueDate: "2026-10-15"},
+		{ID: 2, Name: "Telephone bill", Amount: 100, Frequency: "monthly", FirstDueDate: "2026-11-05"},
+	})
+	if len(period.YourPayPeriods) != 2 ||
+		period.YourPayPeriods[0].PayDate != "2026-10-08" ||
+		period.YourPayPeriods[1].PayDate != "2026-10-22" {
+		t.Fatalf("your pay periods = %+v, want October 8 and 22 deposits", period.YourPayPeriods)
+	}
+	if period.ScheduledExpenseTotal != 1500 || len(period.ScheduledExpenses) != 1 ||
+		period.ScheduledExpenses[0].Name != "Mortgage payment" {
+		t.Fatalf("scheduled expenses = %+v with total %v, want only $1500 mortgage payment", period.ScheduledExpenses, period.ScheduledExpenseTotal)
 	}
 }
 

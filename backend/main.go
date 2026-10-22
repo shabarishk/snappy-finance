@@ -86,6 +86,7 @@ func main() {
 	mux.Handle("GET /api/dashboard/metrics", a.requireAuth(http.HandlerFunc(a.getDashboardMetrics)))
 	mux.Handle("GET /api/projections", a.requireAuth(http.HandlerFunc(a.getProjections)))
 	mux.Handle("PUT /api/admin/projections/settings", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.saveProjectionSettings))))
+	mux.Handle("PUT /api/admin/projections/expenses", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.saveScheduledProjectionExpenses))))
 	mux.Handle("GET /api/admin/finance-settings", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.getFinanceSettings))))
 	mux.Handle("PUT /api/admin/finance-settings/expendable-account", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.setExpendableCashAccount))))
 	mux.Handle("PUT /api/admin/finance-settings/credit-card-statement", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.saveCreditCardStatement))))
@@ -715,7 +716,7 @@ func (a *app) persistTransactionPage(ctx context.Context, itemID string, result 
 }
 
 func (a *app) runSyncWorker(ctx context.Context) {
-	if _, _, err := a.refreshOpenIncomeProjections(ctx); err != nil {
+	if _, _, _, err := a.refreshOpenIncomeProjections(ctx); err != nil {
 		log.Printf("refresh income projections at startup: %v", err)
 	}
 	if err := a.syncAll(ctx); err != nil {
@@ -728,7 +729,7 @@ func (a *app) runSyncWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if _, _, err := a.refreshOpenIncomeProjections(ctx); err != nil {
+			if _, _, _, err := a.refreshOpenIncomeProjections(ctx); err != nil {
 				log.Printf("refresh scheduled income projections: %v", err)
 			}
 			if err := a.syncAll(ctx); err != nil {

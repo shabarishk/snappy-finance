@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -33,14 +34,44 @@ type projectionPayPeriod struct {
 	Amount          *float64 `json:"amount"`
 }
 
+type projectionDeposit struct {
+	PayDate string  `json:"pay_date"`
+	Amount  float64 `json:"amount"`
+}
+
+type scheduledExpense struct {
+	ID           int64   `json:"expense_id"`
+	Name         string  `json:"name"`
+	Amount       float64 `json:"amount"`
+	Frequency    string  `json:"frequency"`
+	FirstDueDate string  `json:"first_due_date"`
+}
+
+type scheduledExpenseInput struct {
+	Name         string  `json:"name"`
+	Amount       float64 `json:"amount"`
+	Frequency    string  `json:"frequency"`
+	FirstDueDate string  `json:"first_due_date"`
+}
+
+type scheduledExpenseOccurrence struct {
+	ID      int64   `json:"expense_id"`
+	Name    string  `json:"name"`
+	DueDate string  `json:"due_date"`
+	Amount  float64 `json:"amount"`
+}
+
 type incomeProjectionPeriod struct {
-	SpendMonthStart           string                `json:"spend_month_start"`
-	SpendMonthEnd             string                `json:"spend_month_end"`
-	YourPayTotal              *float64              `json:"your_pay_total"`
-	WifePayTotal              *float64              `json:"wife_pay_total"`
-	ProjectedExpendableIncome *float64              `json:"projected_expendable_income"`
-	WifePayPeriods            []projectionPayPeriod `json:"wife_pay_periods"`
-	MissingWorkdayCounts      []int                 `json:"missing_workday_counts"`
+	SpendMonthStart           string                       `json:"spend_month_start"`
+	SpendMonthEnd             string                       `json:"spend_month_end"`
+	YourPayTotal              *float64                     `json:"your_pay_total"`
+	YourPayPeriods            []projectionDeposit          `json:"your_pay_periods"`
+	WifePayTotal              *float64                     `json:"wife_pay_total"`
+	ProjectedExpendableIncome *float64                     `json:"projected_expendable_income"`
+	WifePayPeriods            []projectionPayPeriod        `json:"wife_pay_periods"`
+	MissingWorkdayCounts      []int                        `json:"missing_workday_counts"`
+	ScheduledExpenseTotal     float64                      `json:"scheduled_expense_total"`
+	ScheduledExpenses         []scheduledExpenseOccurrence `json:"scheduled_expenses"`
 }
 
 var federalHolidayOptions = []federalHolidayOption{
@@ -58,7 +89,7 @@ var federalHolidayOptions = []federalHolidayOption{
 }
 
 func (a *app) getProjections(w http.ResponseWriter, r *http.Request) {
-	settings, periods, err := a.refreshOpenIncomeProjections(r.Context())
+	settings, expenses, periods, err := a.refreshOpenIncomeProjections(r.Context())
 	if err != nil {
 		log.Printf("calculate income projections: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not load income projections")
@@ -67,36 +98,43 @@ func (a *app) getProjections(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"settings":                settings,
 		"federal_holiday_options": federalHolidayOptions,
+		"expenses":                expenses,
 		"periods":                 periods,
 	})
 }
 
-func (a *app) refreshOpenIncomeProjections(ctx context.Context) (projectionSettings, []incomeProjectionPeriod, error) {
+func (a *app) refreshOpenIncomeProjections(ctx context.Context) (projectionSettings, []scheduledExpense, []incomeProjectionPeriod, error) {
 	if err := a.freezeExpiredProjectedIncome(ctx); err != nil {
-		return projectionSettings{}, nil, err
+		return projectionSettings{}, nil, nil, err
 	}
 	settings, err := a.loadProjectionSettings(ctx)
 	if err != nil {
-		return settings, nil, err
+		return settings, nil, nil, err
+	}
+	expenses, err := a.loadScheduledExpenses(ctx)
+	if err != nil {
+		return settings, nil, nil, err
 	}
 	var today time.Time
 	if err := a.db.QueryRow(ctx, "SELECT CURRENT_DATE").Scan(&today); err != nil {
-		return settings, nil, err
+		return settings, nil, nil, err
 	}
 	today = dateOnly(today)
-	periods := calculateIncomeProjections(settings, today)
+	periods := calculateIncomeProjections(settings, expenses, today)
 	if err := a.persistOpenProjections(ctx, today, periods); err != nil {
-		return settings, nil, err
+		return settings, nil, nil, err
 	}
-	return settings, periods, nil
+	return settings, expenses, periods, nil
 }
 
-func calculateIncomeProjections(settings projectionSettings, today time.Time) []incomeProjectionPeriod {
+func calculateIncomeProjections(settings projectionSettings, expenses []scheduledExpense, today time.Time) []incomeProjectionPeriod {
 	firstPeriod := spendCycleStart(today)
 	periods := make([]incomeProjectionPeriod, 0, 13)
 	for index := 0; index <= 12; index++ {
 		periodStart := firstPeriod.AddDate(0, index, 0)
-		periods = append(periods, calculateIncomeProjection(settings, periodStart))
+		period := calculateIncomeProjection(settings, periodStart)
+		applyScheduledExpenses(&period, expenses)
+		periods = append(periods, period)
 	}
 	return periods
 }
@@ -229,6 +267,96 @@ func (a *app) saveProjectionSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"saved": true})
+}
+
+func (a *app) saveScheduledProjectionExpenses(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Expenses []scheduledExpenseInput `json:"expenses"`
+	}
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON request")
+		return
+	}
+	if len(input.Expenses) > 200 {
+		writeError(w, http.StatusBadRequest, "no more than 200 scheduled expenses may be configured")
+		return
+	}
+	for index := range input.Expenses {
+		expense := &input.Expenses[index]
+		expense.Name = strings.TrimSpace(expense.Name)
+		if len(expense.Name) == 0 || len(expense.Name) > 100 {
+			writeError(w, http.StatusBadRequest, "scheduled expense names must be 1 to 100 characters")
+			return
+		}
+		if expense.Amount < 0 {
+			writeError(w, http.StatusBadRequest, "scheduled expense amounts must be zero or greater")
+			return
+		}
+		switch expense.Frequency {
+		case "weekly", "monthly", "bimonthly", "annual":
+		default:
+			writeError(w, http.StatusBadRequest, "scheduled expense frequency must be weekly, monthly, bimonthly, or annual")
+			return
+		}
+		if _, err := time.Parse("2006-01-02", expense.FirstDueDate); err != nil {
+			writeError(w, http.StatusBadRequest, "scheduled expenses require a valid first due date")
+			return
+		}
+	}
+
+	tx, err := a.db.Begin(r.Context())
+	if err != nil {
+		log.Printf("begin scheduled projection expense update: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not save scheduled expenses")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	if _, err := tx.Exec(r.Context(), "DELETE FROM scheduled_projection_expenses"); err != nil {
+		log.Printf("replace scheduled projection expenses: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not save scheduled expenses")
+		return
+	}
+	for _, expense := range input.Expenses {
+		if _, err := tx.Exec(r.Context(), `
+			INSERT INTO scheduled_projection_expenses (name, amount, frequency, first_due_date)
+			VALUES ($1, $2, $3, $4)`,
+			expense.Name, expense.Amount, expense.Frequency, expense.FirstDueDate); err != nil {
+			log.Printf("save scheduled projection expense: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not save scheduled expenses")
+			return
+		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		log.Printf("commit scheduled projection expense update: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not save scheduled expenses")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"saved": true})
+}
+
+func (a *app) loadScheduledExpenses(ctx context.Context) ([]scheduledExpense, error) {
+	expenses := make([]scheduledExpense, 0)
+	rows, err := a.db.Query(ctx, `
+		SELECT expense_id, name, amount, frequency, first_due_date
+		FROM scheduled_projection_expenses
+		ORDER BY first_due_date, expense_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var expense scheduledExpense
+		var firstDueDate time.Time
+		if err := rows.Scan(&expense.ID, &expense.Name, &expense.Amount, &expense.Frequency, &firstDueDate); err != nil {
+			return nil, err
+		}
+		expense.FirstDueDate = firstDueDate.Format("2006-01-02")
+		expenses = append(expenses, expense)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return expenses, nil
 }
 
 func (a *app) loadProjectionSettings(ctx context.Context) (projectionSettings, error) {
@@ -403,8 +531,10 @@ func calculateIncomeProjection(settings projectionSettings, periodStart time.Tim
 	projection := incomeProjectionPeriod{
 		SpendMonthStart:      periodStart.Format("2006-01-02"),
 		SpendMonthEnd:        periodEnd.Format("2006-01-02"),
+		YourPayPeriods:       make([]projectionDeposit, 0, 3),
 		WifePayPeriods:       make([]projectionPayPeriod, 0, 2),
 		MissingWorkdayCounts: make([]int, 0),
+		ScheduledExpenses:    make([]scheduledExpenseOccurrence, 0),
 	}
 	if settings.BiweeklyPayAmount != nil && settings.BiweeklyPaydayAnchor != nil {
 		anchor, err := time.Parse("2006-01-02", *settings.BiweeklyPaydayAnchor)
@@ -413,6 +543,10 @@ func calculateIncomeProjection(settings projectionSettings, periodStart time.Tim
 			total := 0.0
 			for !payday.After(periodEnd) {
 				total += *settings.BiweeklyPayAmount
+				projection.YourPayPeriods = append(projection.YourPayPeriods, projectionDeposit{
+					PayDate: payday.Format("2006-01-02"),
+					Amount:  *settings.BiweeklyPayAmount,
+				})
 				payday = payday.AddDate(0, 0, 14)
 			}
 			projection.YourPayTotal = &total
@@ -481,6 +615,105 @@ func calculateIncomeProjection(settings projectionSettings, periodStart time.Tim
 		projection.ProjectedExpendableIncome = &total
 	}
 	return projection
+}
+
+func applyScheduledExpenses(period *incomeProjectionPeriod, expenses []scheduledExpense) {
+	start, err := time.Parse("2006-01-02", period.SpendMonthStart)
+	if err != nil {
+		log.Printf("invalid spend cycle start %q while calculating scheduled expenses: %v", period.SpendMonthStart, err)
+		return
+	}
+	end, err := time.Parse("2006-01-02", period.SpendMonthEnd)
+	if err != nil {
+		log.Printf("invalid spend cycle end %q while calculating scheduled expenses: %v", period.SpendMonthEnd, err)
+		return
+	}
+	for _, expense := range expenses {
+		firstDue, err := time.Parse("2006-01-02", expense.FirstDueDate)
+		if err != nil {
+			log.Printf("invalid first due date %q for scheduled expense %q: %v", expense.FirstDueDate, expense.Name, err)
+			continue
+		}
+		for _, dueDate := range scheduledExpenseDueDates(expense.Frequency, firstDue, start, end) {
+			period.ScheduledExpenses = append(period.ScheduledExpenses, scheduledExpenseOccurrence{
+				ID:      expense.ID,
+				Name:    expense.Name,
+				DueDate: dueDate.Format("2006-01-02"),
+				Amount:  expense.Amount,
+			})
+			period.ScheduledExpenseTotal += expense.Amount
+		}
+	}
+	sort.Slice(period.ScheduledExpenses, func(i, j int) bool {
+		if period.ScheduledExpenses[i].DueDate == period.ScheduledExpenses[j].DueDate {
+			return period.ScheduledExpenses[i].Name < period.ScheduledExpenses[j].Name
+		}
+		return period.ScheduledExpenses[i].DueDate < period.ScheduledExpenses[j].DueDate
+	})
+}
+
+func scheduledExpenseDueDates(frequency string, firstDue, periodStart, periodEnd time.Time) []time.Time {
+	firstDue = dateOnly(firstDue)
+	periodStart = dateOnly(periodStart)
+	periodEnd = dateOnly(periodEnd)
+	if firstDue.After(periodEnd) || periodEnd.Before(periodStart) {
+		return nil
+	}
+	if frequency == "weekly" {
+		daysUntilStart := int(periodStart.Sub(firstDue).Hours() / 24)
+		weeks := 0
+		if daysUntilStart > 0 {
+			weeks = (daysUntilStart + 6) / 7
+		}
+		due := firstDue.AddDate(0, 0, weeks*7)
+		dates := make([]time.Time, 0, 5)
+		for !due.After(periodEnd) {
+			if !due.Before(periodStart) {
+				dates = append(dates, due)
+			}
+			due = due.AddDate(0, 0, 7)
+		}
+		return dates
+	}
+
+	monthsBetween := (periodStart.Year()-firstDue.Year())*12 + int(periodStart.Month()-firstDue.Month())
+	intervalMonths := 0
+	switch frequency {
+	case "monthly":
+		intervalMonths = 1
+	case "bimonthly":
+		intervalMonths = 2
+	case "annual":
+		intervalMonths = 12
+	default:
+		return nil
+	}
+	intervals := 0
+	if monthsBetween > 0 {
+		intervals = (monthsBetween + intervalMonths - 1) / intervalMonths
+	}
+	due := expenseDateAtInterval(firstDue, intervals*intervalMonths)
+	if due.Before(periodStart) {
+		intervals++
+		due = expenseDateAtInterval(firstDue, intervals*intervalMonths)
+	}
+	dates := make([]time.Time, 0, 2)
+	for !due.After(periodEnd) {
+		dates = append(dates, due)
+		intervals++
+		due = expenseDateAtInterval(firstDue, intervals*intervalMonths)
+	}
+	return dates
+}
+
+func expenseDateAtInterval(firstDue time.Time, intervalMonths int) time.Time {
+	monthStart := time.Date(firstDue.Year(), firstDue.Month()+time.Month(intervalMonths), 1, 0, 0, 0, 0, time.UTC)
+	lastDay := time.Date(monthStart.Year(), monthStart.Month()+1, 0, 0, 0, 0, 0, time.UTC).Day()
+	day := firstDue.Day()
+	if day > lastDay {
+		day = lastDay
+	}
+	return time.Date(monthStart.Year(), monthStart.Month(), day, 0, 0, 0, 0, time.UTC)
 }
 
 func spendCycleStart(date time.Time) time.Time {

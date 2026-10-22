@@ -33,6 +33,12 @@ button { cursor: pointer; }
 .dashboard-preferences-drawer { background: #f7f8f5; bottom: 0; box-shadow: -14px 0 40px #172a2522; height: 100vh; height: 100dvh; overflow-y: auto; padding: 18px; position: fixed; right: 0; top: 0; transform: translateX(102%); transition: transform .25s ease, visibility 0s linear .25s; visibility: hidden; width: min(440px, 94vw); z-index: 1101; }
 .dashboard-preferences-drawer.open { transform: translateX(0); transition: transform .25s ease; visibility: visible; }
 .dashboard-preferences-drawer .settings-panel { margin: 0; min-height: 100%; }
+.projection-assumptions-drawer { width: min(620px, 96vw); }
+.projection-assumptions-drawer .projection-assumptions-drawer-panel { min-height: auto; overflow: visible; }
+.scheduled-expenses-drawer { width: min(920px, 98vw); }
+.scheduled-expenses-drawer .scheduled-expenses-drawer-panel { min-height: auto; overflow: visible; }
+.projection-assumptions-button { align-items: center; display: inline-flex; gap: 7px; white-space: nowrap; }
+.projection-drawer-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .preferences-drawer-heading { gap: 12px; }
 .preferences-drawer-close { align-items: center; background: white; border: 1px solid #dfe6e1; border-radius: 8px; color: #52615a; display: inline-flex; flex: 0 0 auto; height: 40px; justify-content: center; padding: 0; width: 40px; }
 .preferences-drawer-close:hover { background: #f9fbf9; }
@@ -136,8 +142,8 @@ button { cursor: pointer; }
 .projection-settings-form { padding: 19px 21px; }
 .projection-pay-inputs { display: grid; gap: 14px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .projection-pay-inputs label, .projection-rate-grid label, .projection-day-off-entry label { color: #52615a; display: flex; flex-direction: column; font-size: 10px; font-weight: 600; gap: 6px; }
-.projection-settings-form input:not([type="checkbox"]) { background: white; border: 1px solid #dce4de; border-radius: 7px; color: #52615a; font-size: 12px; height: 38px; outline: none; padding: 0 10px; }
-.projection-settings-form input:not([type="checkbox"]):focus { border-color: #78b89b; box-shadow: 0 0 0 3px #19856815; }
+.projection-settings-form input:not([type="checkbox"]), .projection-settings-form select { background: white; border: 1px solid #dce4de; border-radius: 7px; color: #52615a; font-size: 12px; height: 38px; outline: none; padding: 0 10px; }
+.projection-settings-form input:not([type="checkbox"]):focus, .projection-settings-form select:focus { border-color: #78b89b; box-shadow: 0 0 0 3px #19856815; }
 .projection-help { color: var(--muted); font-size: 10px; line-height: 1.5; margin: 10px 0 18px; }
 .projection-holidays { border: 1px solid var(--line); border-radius: 8px; margin: 18px 0 0; padding: 12px 14px; }
 .projection-holidays legend { color: #52615a; font-size: 11px; font-weight: 600; padding: 0 5px; }
@@ -156,6 +162,11 @@ button { cursor: pointer; }
 .projection-day-off-list li { align-items: center; border: 1px solid var(--line); border-radius: 7px; color: #52615a; display: flex; font-size: 10px; justify-content: space-between; padding: 5px 7px 5px 10px; }
 .projection-day-off-list .secondary-button { min-height: 30px; padding: 0 9px; }
 .projection-save-row { border-top: 1px solid var(--line); display: flex; justify-content: flex-end; margin-top: 18px; padding-top: 16px; }
+.scheduled-expense-list { display: grid; gap: 10px; }
+.scheduled-expense-editor { align-items: end; background: #fbfcfb; border: 1px solid var(--line); border-radius: 8px; display: grid; gap: 10px; grid-template-columns: minmax(150px, 1.5fr) minmax(95px, .7fr) minmax(160px, 1.2fr) minmax(130px, 1fr) auto; padding: 11px; }
+.scheduled-expense-editor label { color: #52615a; display: flex; flex-direction: column; font-size: 10px; font-weight: 600; gap: 6px; min-width: 0; }
+.scheduled-expense-remove { min-height: 38px; padding: 0 10px; }
+.scheduled-expense-actions { gap: 10px; }
 .projection-period-list { padding: 0 21px; }
 .projection-period { border-top: 1px solid var(--line); padding: 15px 0; }
 .projection-period-heading { align-items: center; display: flex; gap: 14px; justify-content: space-between; }
@@ -172,6 +183,15 @@ button { cursor: pointer; }
 .projection-pay-details summary { color: var(--green-dark); cursor: pointer; font-size: 10px; font-weight: 600; }
 .projection-pay-period { align-items: center; color: var(--muted); display: flex; font-size: 10px; gap: 12px; justify-content: space-between; padding: 8px 0 0 10px; }
 .projection-pay-period strong { color: #52615a; font-size: 10px; white-space: nowrap; }
+.projection-scheduled-total { align-items: center; color: #bd554b; display: flex; font-size: 10px; font-weight: 600; gap: 10px; justify-content: flex-end; margin-top: 7px; }
+.projection-scheduled-total strong { font-size: 12px; }
+.projection-details-grid { display: grid; gap: 18px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 10px; }
+.projection-detail-column { min-width: 0; }
+.projection-detail-column h4 { color: #52615a; font-size: 10px; margin: 0; }
+.projection-detail-empty { color: var(--muted); font-size: 10px; margin: 8px 0 0; }
+.projection-expense-detail strong, .projection-expense-detail-total { color: #bd554b; }
+.projection-expense-detail-total { align-items: center; border-top: 1px solid var(--line); display: flex; font-size: 10px; justify-content: space-between; margin: 9px 0 0 10px; padding-top: 8px; }
+.projection-expense-detail-total strong { font-size: 10px; }
 .password-panel { margin-bottom: 18px; padding: 15px 0 0; }
 .password-panel summary { color: #52615a; cursor: pointer; font-size: 12px; font-weight: 600; padding: 0 21px 15px; }
 .password-panel .profile-form { border-top: 1px solid var(--line); }
@@ -293,11 +313,15 @@ footer { color: #9aa39e; font-size: 10px; padding: 6px 0 16px; }
   .transaction-tab.active { background: none; border-bottom-color: var(--green); }
   .transaction-list-toolbar { padding-left: 15px; padding-right: 15px; }
   .projection-settings-form { padding: 15px; }
+  .projection-drawer-actions { justify-content: flex-start; }
+  .scheduled-expense-editor { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .scheduled-expense-editor label:first-child { grid-column: 1 / -1; }
   .projection-pay-inputs { grid-template-columns: minmax(0, 1fr); }
   .projection-holiday-grid, .projection-day-off-list { grid-template-columns: minmax(0, 1fr); }
   .projection-rate-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .projection-period-list { padding-left: 15px; padding-right: 15px; }
   .projection-pay-period { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .projection-details-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (orientation: landscape) {
