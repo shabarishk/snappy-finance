@@ -169,6 +169,8 @@ type LiquidityCategory = {
 type LiquiditySpendMonth = {
   spend_month: string;
   categories: LiquidityCategory[];
+  projected_expendable_income: number | null;
+  scheduled_expense_total: number;
 };
 
 type DashboardLiquidity = {
@@ -178,8 +180,11 @@ type DashboardLiquidity = {
 
 const liquidityChartColors = ["#198568", "#4a9b78", "#79b58e", "#a6c89e", "#d0d99c", "#e5b86d", "#d98268", "#9e829b", "#6f8ba5"];
 
-function SpendingPieChart({ month }: { month: LiquiditySpendMonth }) {
+function SpendingPieChart({ month, showForecast }: { month: LiquiditySpendMonth; showForecast: boolean }) {
   const total = month.categories.reduce((sum, category) => sum + category.amount, 0);
+  const projectedLiquidity = month.projected_expendable_income === null
+    ? null
+    : month.projected_expendable_income - month.scheduled_expense_total - total;
   const [year, monthNumber] = month.spend_month.split("-").map(Number);
   const periodLabel = getStatisticsRange("spend", month.spend_month).label;
   let startAngle = -Math.PI / 2;
@@ -221,6 +226,19 @@ function SpendingPieChart({ month }: { month: LiquiditySpendMonth }) {
           </ul>
         </div>
       ) : <div className="liquidity-empty">No expenses assigned to this spend month yet.</div>}
+      {showForecast && (
+        <dl className="liquidity-forecast">
+          <div><dt>Projected income</dt><dd>{month.projected_expendable_income === null ? "Incomplete" : money(month.projected_expendable_income)}</dd></div>
+          <div><dt>Scheduled expenses</dt><dd>−{money(month.scheduled_expense_total)}</dd></div>
+          <div><dt>Expenses incurred</dt><dd>−{money(total)}</dd></div>
+          <div className="liquidity-forecast-remaining">
+            <dt>Projected liquidity remaining</dt>
+            <dd className={projectedLiquidity === null ? "" : projectedLiquidity >= 0 ? "positive-text" : "negative-text"}>
+              {projectedLiquidity === null ? "Incomplete" : money(projectedLiquidity)}
+            </dd>
+          </div>
+        </dl>
+      )}
     </article>
   );
 }
@@ -2059,7 +2077,9 @@ export default function App() {
           ) : dashboardLiquidity ? (
             <>
               <div className="liquidity-month-grid">
-                {dashboardLiquidity.months.map((month) => <SpendingPieChart key={month.spend_month} month={month} />)}
+                {dashboardLiquidity.months.map((month, index) => (
+                  <SpendingPieChart key={month.spend_month} month={month} showForecast={index > 0} />
+                ))}
               </div>
               {dashboardLiquidity.unconfigured_credit_accounts.length > 0 && (
                 <p className="finance-help liquidity-help">

@@ -218,6 +218,11 @@ button { cursor: pointer; }
 .liquidity-legend-label { color: #65736c; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .liquidity-legend strong { color: #52615a; font-size: 10px; font-weight: 600; white-space: nowrap; }
 .liquidity-empty { align-items: center; color: var(--muted); display: flex; font-size: 10px; min-height: 116px; }
+.liquidity-forecast { border-top: 1px solid var(--line); color: #65736c; display: flex; flex-direction: column; font-size: 10px; gap: 8px; margin: 15px 0 0; padding: 12px 0 0; }
+.liquidity-forecast > div { align-items: baseline; display: flex; gap: 10px; justify-content: space-between; }
+.liquidity-forecast dt { min-width: 0; }
+.liquidity-forecast dd { color: #52615a; font-weight: 600; margin: 0; text-align: right; white-space: nowrap; }
+.liquidity-forecast .liquidity-forecast-remaining { border-top: 1px solid var(--line); color: #34463e; font-weight: 600; padding-top: 8px; }
 .liquidity-help { border-top: 1px solid var(--line); padding-top: 12px; }
 .account-group + .account-group { border-top: 1px solid var(--line); }
 .account-group-heading { align-items: center; color: #52615a; display: flex; justify-content: space-between; padding: 15px 0 4px; }

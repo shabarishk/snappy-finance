@@ -13,8 +13,10 @@ type liquidityCategory struct {
 }
 
 type liquiditySpendMonth struct {
-	SpendMonth string              `json:"spend_month"`
-	Categories []liquidityCategory `json:"categories"`
+	SpendMonth                string              `json:"spend_month"`
+	Categories                []liquidityCategory `json:"categories"`
+	ProjectedExpendableIncome *float64            `json:"projected_expendable_income"`
+	ScheduledExpenseTotal     float64             `json:"scheduled_expense_total"`
 }
 
 type dashboardLiquidity struct {
@@ -40,6 +42,21 @@ func (a *app) getDashboardLiquidity(w http.ResponseWriter, r *http.Request) {
 		response.Months[i] = liquiditySpendMonth{
 			SpendMonth: month,
 			Categories: make([]liquidityCategory, 0),
+		}
+	}
+	_, _, projectedPeriods, err := a.refreshOpenIncomeProjections(r.Context())
+	if err != nil {
+		log.Printf("calculate dashboard liquidity projections: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load dashboard liquidity")
+		return
+	}
+	for _, period := range projectedPeriods {
+		if len(period.SpendMonthStart) < 7 {
+			continue
+		}
+		if index, found := targetMonths[period.SpendMonthStart[:7]]; found && index > 0 {
+			response.Months[index].ProjectedExpendableIncome = period.ProjectedExpendableIncome
+			response.Months[index].ScheduledExpenseTotal = period.ScheduledExpenseTotal
 		}
 	}
 
