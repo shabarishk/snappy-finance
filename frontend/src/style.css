@@ -99,6 +99,13 @@ button { cursor: pointer; }
 .transaction-account-filters > strong { color: #52615a; font-size: 10px; }
 .transaction-account-filter { align-items: center; color: #65736c; display: inline-flex; font-size: 10px; gap: 6px; max-width: 100%; }
 .transaction-account-filter input { accent-color: var(--green); margin: 0; }
+.category-scope-backdrop { align-items: center; background: #172a2555; display: flex; inset: 0; justify-content: center; padding: 16px; position: fixed; z-index: 1200; }
+.category-scope-dialog { background: white; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 18px 48px #172a2533; max-width: 520px; padding: 22px; width: 100%; }
+.category-scope-dialog h2 { color: #34463e; font-size: 16px; margin: 0 0 12px; }
+.category-scope-dialog p { color: #65736c; font-size: 12px; line-height: 1.6; margin: 0 0 18px; overflow-wrap: anywhere; }
+.category-scope-dialog p strong { color: #34463e; }
+.category-scope-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.category-scope-help { color: var(--muted); display: block; font-size: 10px; line-height: 1.5; margin-top: 12px; }
 .transaction-list-toolbar { align-items: center; border-bottom: 1px solid #eff1ef; color: var(--muted); display: flex; font-size: 10px; gap: 12px; justify-content: space-between; padding: 12px 22px; }
 .page-size-control { align-items: center; color: #52615a; display: flex; gap: 8px; white-space: nowrap; }
 .page-size-control select { background: white; border: 1px solid #dfe6e1; border-radius: 6px; color: #52615a; font-size: 11px; height: 36px; padding: 0 8px; }
@@ -388,6 +395,8 @@ footer { color: #9aa39e; font-size: 10px; padding: 6px 0 16px; }
   .transaction-tabs { padding-left: 8px; padding-right: 8px; }
   .transaction-list-toolbar { padding-left: 12px; padding-right: 12px; }
   .transaction-account-filters { padding-left: 12px; padding-right: 12px; }
+  .category-scope-actions { justify-content: stretch; }
+  .category-scope-actions button { flex: 1 1 auto; }
 }
 
 @media (pointer: coarse) {

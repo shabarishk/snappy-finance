@@ -295,7 +295,8 @@ func (a *app) listTransactions(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.db.Query(r.Context(), `
 		SELECT transaction_id, account_id, name, merchant_name, amount, transaction_date::text,
 		       pending, category_primary, category_detailed, iso_currency_code,
-		       CASE WHEN $1 THEN hidden_from_users ELSE FALSE END, category_id
+		       CASE WHEN $1 THEN hidden_from_users ELSE FALSE END, category_id,
+		       category_match_key <> ''
 		FROM transactions
 		WHERE $1 OR NOT hidden_from_users
 		ORDER BY transaction_date DESC, transaction_id
@@ -311,7 +312,7 @@ func (a *app) listTransactions(w http.ResponseWriter, r *http.Request) {
 		var item transaction
 		if err := rows.Scan(&item.TransactionID, &item.AccountID, &item.Name, &item.MerchantName, &item.Amount,
 			&item.Date, &item.Pending, &item.CategoryPrimary, &item.CategoryDetailed, &item.Currency,
-			&item.HiddenFromUsers, &item.CategoryID); err != nil {
+			&item.HiddenFromUsers, &item.CategoryID, &item.HasCategoryMatch); err != nil {
 			log.Printf("scan transaction row: %v", err)
 			writeError(w, http.StatusInternalServerError, "could not load transactions")
 			return
@@ -384,12 +385,24 @@ func (a *app) updateTransactionCategory(w http.ResponseWriter, r *http.Request) 
 	var input struct {
 		TransactionID string  `json:"transaction_id"`
 		CategoryID    *string `json:"category_id"`
+		Scope         string  `json:"scope"`
 	}
 	if err := decodeJSON(r, &input); err != nil || input.TransactionID == "" || input.CategoryID == nil {
 		writeError(w, http.StatusBadRequest, "transaction_id and category_id are required")
 		return
 	}
 	categoryID := strings.TrimSpace(*input.CategoryID)
+	scope := input.Scope
+	if scope == "" {
+		scope = "related"
+	}
+	if categoryID == "" {
+		scope = "single"
+	}
+	if scope != "single" && scope != "related" {
+		writeError(w, http.StatusBadRequest, "category scope must be single or related")
+		return
+	}
 
 	tx, err := a.db.Begin(r.Context())
 	if err != nil {
@@ -437,7 +450,7 @@ func (a *app) updateTransactionCategory(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	if categoryID != "" && matchKey != "" {
+	if categoryID != "" && matchKey != "" && scope == "related" {
 		_, err := tx.Exec(r.Context(), `
 			INSERT INTO transaction_category_rules (category_type, match_key, category_id)
 			VALUES ($1, $2, $3)
@@ -460,10 +473,10 @@ func (a *app) updateTransactionCategory(w http.ResponseWriter, r *http.Request) 
 			WHERE transaction_id = $1
 			RETURNING transaction_id`
 		updateArgs = []any{input.TransactionID}
-	} else if matchKey == "" {
+	} else if matchKey == "" || scope == "single" {
 		updateQuery = `
 			UPDATE transactions
-			SET category_id = $1, category_rule_exempt = FALSE
+			SET category_id = $1, category_rule_exempt = TRUE
 			WHERE transaction_id = $2
 			RETURNING transaction_id`
 		updateArgs = []any{categoryID, input.TransactionID}
@@ -513,7 +526,7 @@ func (a *app) updateTransactionCategory(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"category_id":             result,
 		"matched_transaction_ids": matchedTransactionIDs,
-		"matching_rule_applied":   categoryID != "" && matchKey != "",
+		"matching_rule_applied":   categoryID != "" && matchKey != "" && scope == "related",
 	})
 }
 
@@ -770,6 +783,7 @@ type transaction struct {
 	Currency         *string `json:"iso_currency_code"`
 	HiddenFromUsers  bool    `json:"hidden_from_users,omitempty"`
 	CategoryID       *string `json:"category_id"`
+	HasCategoryMatch bool    `json:"has_category_match"`
 }
 
 type transactionCategory struct {

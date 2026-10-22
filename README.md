@@ -8,6 +8,7 @@ A self-hosted personal finance app scaffold using Go, React, PostgreSQL, and Pla
 - Shared household financial data, profile-specific dashboard card preferences, and admin-only Plaid/profile management.
 - Administrators can hide selected transactions from household users while retaining access to them.
 - Administrators can categorize expense transactions separately from income and transfer transactions, and exclude categories from monthly spending or income totals.
+- Transportation/Mobility is available as an expense category. When categorizing a transaction with a stable automated match, administrators can apply the category to that item only or to all related past and future matches.
 - The dashboard's first summary card defaults to expendable income, based on transactions assigned the Expendable income category, and can be toggled to total income.
 - Dashboard income, spending, and net statistics default to the spend calendar from the 4th through the 3rd; switch to calendar month from Dashboard preferences.
 - The Overview heading opens a calendar-month selector; its history begins one year before first use in the browser and grows as new months arrive.
@@ -20,7 +21,7 @@ A self-hosted personal finance app scaffold using Go, React, PostgreSQL, and Pla
 - Administrators can configure the expendable cash account, each credit card's statement closing and payment due days, income assumptions, and scheduled expense categories. Financial Management displays retrieved Plaid statement balances by account and due date; balances can also be entered manually when an institution or existing Plaid connection does not provide them.
 - Each profile can hide and reorder all eight Overview summary cards from the Filter drawer.
 - Dashboard filters and summary-card preferences open in a slide-in drawer from the right.
-- Assigning a category creates a reusable rule that updates similar existing transactions and applies to future syncs. Expense rules match the normalized first three merchant/description words; income rules match the normalized first three transaction-name words on the same account.
+- Applying a category to related items creates a reusable rule that updates similar existing transactions and applies to future syncs; applying it to one item leaves the rule and other transactions unchanged. Expense rules match the normalized first three merchant/description words; income rules match the normalized first three transaction-name words on the same account.
 - The Administration page separates user management and financial management into tabs.
 - Plaid Link token creation and public-token exchange.
 - AES-GCM encryption of stored Plaid access tokens.

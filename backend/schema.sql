@@ -141,6 +141,7 @@ INSERT INTO transaction_categories (category_id, label, category_type) VALUES
     ('shopping', 'Shopping', 'expense'),
     ('streaming', 'Streaming', 'expense'),
     ('home_maintenance', 'Home maintenance', 'expense'),
+    ('transportation_mobility', 'Transportation/Mobility', 'expense'),
     ('other', 'Other', 'expense'),
     ('income', 'Income', 'income'),
     ('transfer', 'Transfer', 'income'),

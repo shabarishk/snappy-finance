@@ -151,6 +151,7 @@ type Transaction = {
   iso_currency_code: string | null;
   hidden_from_users?: boolean;
   category_id: string | null;
+  has_category_match: boolean;
 };
 
 type TransactionTabID = "depository" | "credit" | "loan" | "other";
@@ -381,6 +382,7 @@ export default function App() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [transactionCategories, setTransactionCategories] = useState<TransactionCategory[]>([]);
+  const [pendingCategoryChange, setPendingCategoryChange] = useState<{ item: Transaction; categoryID: string } | null>(null);
   const [dashboardLiquidity, setDashboardLiquidity] = useState<DashboardLiquidity | null>(null);
   const [liquidityLoading, setLiquidityLoading] = useState(false);
   const [selectedLiquidityMonthIndex, setSelectedLiquidityMonthIndex] = useState(1);
@@ -466,13 +468,14 @@ export default function App() {
   }, [monthPickerOpen]);
 
   useEffect(() => {
-    if (!sidebarOpen && !dashboardPreferencesOpen && !projectionAssumptionsOpen && !scheduledExpensesOpen) return;
+    if (!sidebarOpen && !dashboardPreferencesOpen && !projectionAssumptionsOpen && !scheduledExpensesOpen && !pendingCategoryChange) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setSidebarOpen(false);
         setDashboardPreferencesOpen(false);
         setProjectionAssumptionsOpen(false);
         setScheduledExpensesOpen(false);
+        setPendingCategoryChange(null);
       }
     };
     const previousOverflow = document.body.style.overflow;
@@ -482,7 +485,7 @@ export default function App() {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [dashboardPreferencesOpen, projectionAssumptionsOpen, scheduledExpensesOpen, sidebarOpen]);
+  }, [dashboardPreferencesOpen, pendingCategoryChange, projectionAssumptionsOpen, scheduledExpensesOpen, sidebarOpen]);
 
   function navigateToPage(page: "overview" | "administration" | "transactions" | "projections") {
     setActivePage(page);
@@ -871,7 +874,23 @@ export default function App() {
     }
   }
 
-  async function setTransactionCategory(item: Transaction, categoryID: string) {
+  function requestTransactionCategoryChange(item: Transaction, categoryID: string) {
+    if (categoryID === (item.category_id ?? "")) return;
+    if (categoryID && item.has_category_match) {
+      setPendingCategoryChange({ item, categoryID });
+      return;
+    }
+    void setTransactionCategory(item, categoryID, "single");
+  }
+
+  function applyPendingCategoryChange(scope: "single" | "related") {
+    if (!pendingCategoryChange) return;
+    const { item, categoryID } = pendingCategoryChange;
+    setPendingCategoryChange(null);
+    void setTransactionCategory(item, categoryID, scope);
+  }
+
+  async function setTransactionCategory(item: Transaction, categoryID: string, scope: "single" | "related") {
     setError("");
     setNotice("");
     try {
@@ -881,7 +900,7 @@ export default function App() {
         matching_rule_applied: boolean;
       }>("/api/admin/transactions/category", {
         method: "PATCH",
-        body: JSON.stringify({ transaction_id: item.transaction_id, category_id: categoryID }),
+        body: JSON.stringify({ transaction_id: item.transaction_id, category_id: categoryID, scope }),
       });
       const matchedIDs = new Set(result.matched_transaction_ids);
       setTransactions((current) => current.map((transaction) =>
@@ -892,6 +911,10 @@ export default function App() {
       const label = transactionCategories.find((category) => category.category_id === categoryID)?.label;
       if (!categoryID) {
         setNotice("Using the bank category for this transaction. Similar transactions remain categorized automatically.");
+      } else if (scope === "single") {
+        setNotice(item.has_category_match
+          ? `Applied ${label ?? "Other"} to this transaction only. Related transactions and future matches are unchanged.`
+          : `Applied ${label ?? "Other"} to this transaction only because it has no stable description for matching related transactions.`);
       } else if (result.matching_rule_applied) {
         const count = result.matched_transaction_ids.length;
         const matchScope = item.amount < 0 ? " in this account" : "";
@@ -1195,7 +1218,7 @@ export default function App() {
                         className="category-select"
                         value={item.category_id ?? ""}
                         aria-label={`Category for ${item.merchant_name || item.name}`}
-                        onChange={(event) => void setTransactionCategory(item, event.target.value)}
+                        onChange={(event) => requestTransactionCategoryChange(item, event.target.value)}
                       >
                         <option value="">Bank category</option>
                         {transactionCategories.filter((category) => category.category_type === (item.amount < 0 ? "income" : "expense")).map((category) => (
@@ -1862,6 +1885,29 @@ export default function App() {
 
         {error && <div className="alert error-message">{error}</div>}
         {notice && <div className="alert success-message">{notice}</div>}
+
+        {pendingCategoryChange && (
+          <div
+            className="category-scope-backdrop"
+            role="presentation"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setPendingCategoryChange(null);
+            }}
+          >
+            <section className="category-scope-dialog" role="dialog" aria-modal="true" aria-labelledby="category-scope-title">
+              <h2 id="category-scope-title">Apply category change</h2>
+              <p>
+                Apply <strong>{transactionCategories.find((category) => category.category_id === pendingCategoryChange.categoryID)?.label ?? "this category"}</strong> to <strong>{pendingCategoryChange.item.merchant_name || pendingCategoryChange.item.name}</strong>:
+              </p>
+              <div className="category-scope-actions">
+                <button className="secondary-button" type="button" onClick={() => setPendingCategoryChange(null)}>Cancel</button>
+                <button className="secondary-button" type="button" onClick={() => applyPendingCategoryChange("single")}>This transaction only</button>
+                <button className="primary-button" type="button" onClick={() => applyPendingCategoryChange("related")}>All related transactions</button>
+              </div>
+              <span className="category-scope-help">“All related” also updates future transactions matched by the automated rule.</span>
+            </section>
+          </div>
+        )}
 
         {activePage === "administration" ? (
           profile?.role === "admin" ? (
