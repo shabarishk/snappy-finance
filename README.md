@@ -16,6 +16,7 @@ A self-hosted personal finance app scaffold using Go, React, PostgreSQL, and Pla
 - The dashboard's cash balance card totals depository accounts only.
 - Overview adds the administrator-selected expendable cash balance, total current credit balance, statement balances due in the selected statistics period, and automatically calculated projected expendable income.
 - Overview displays expense-category pie charts for the current spend month and the next two. Cash-account purchases are assigned to the 4th–3rd spend month containing the transaction date; credit purchases are assigned according to the card's configured statement closing day and payment due day.
+- Selecting a category in the Overview liquidity pie chart or legend opens a scrollable list of the included transactions for that spend month.
 - The next two spend-month charts also show projected income, scheduled expenses, incurred expenses, and projected liquidity remaining. Remaining liquidity is unavailable until projected income assumptions are complete.
 - Each profile can independently exclude expense categories from their liquidity charts and forecast totals through the Overview Filter drawer; administrator-wide category exclusions continue to apply.
 - Each profile can also exclude individual cash- or credit-account transactions from their own liquidity pie charts and incurred-expense forecast using the Transactions page.

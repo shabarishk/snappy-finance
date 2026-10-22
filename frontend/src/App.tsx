@@ -169,6 +169,16 @@ type LiquidityCategory = {
   amount: number;
 };
 
+type LiquidityTransaction = {
+  transaction_id: string;
+  name: string;
+  merchant_name: string | null;
+  date: string;
+  amount: number;
+  account_name: string;
+  iso_currency_code: string | null;
+};
+
 type LiquiditySpendMonth = {
   spend_month: string;
   categories: LiquidityCategory[];
@@ -181,6 +191,15 @@ type DashboardLiquidity = {
   unconfigured_credit_accounts: string[];
 };
 
+type LiquidityTransactionsDialog = {
+  requestID: string;
+  spendMonth: string;
+  category: string;
+  transactions: LiquidityTransaction[];
+  loading: boolean;
+  error: string;
+};
+
 const liquidityChartColors = ["#198568", "#4a9b78", "#79b58e", "#a6c89e", "#d0d99c", "#e5b86d", "#d98268", "#9e829b", "#6f8ba5"];
 
 function SpendingPieChart({
@@ -190,6 +209,7 @@ function SpendingPieChart({
   canGoNext,
   onPrevious,
   onNext,
+  onCategoryClick,
 }: {
   month: LiquiditySpendMonth;
   showForecast: boolean;
@@ -197,6 +217,7 @@ function SpendingPieChart({
   canGoNext: boolean;
   onPrevious: () => void;
   onNext: () => void;
+  onCategoryClick: (month: LiquiditySpendMonth, category: string) => void;
 }) {
   const total = month.categories.reduce((sum, category) => sum + category.amount, 0);
   const projectedLiquidity = month.projected_expendable_income === null
@@ -237,17 +258,49 @@ function SpendingPieChart({
       </div>
       {total > 0 ? (
         <div className="liquidity-chart-content">
-          <svg className="liquidity-pie" viewBox="0 0 200 200" role="img" aria-label={`Spending by category totaling ${money(total)}`}>
+          <svg className="liquidity-pie" viewBox="0 0 200 200" role="group" aria-label={`Spending by category totaling ${money(total)}`}>
             {slices.map((slice) => slice.path
-              ? <path key={slice.label} d={slice.path} fill={slice.color}><title>{slice.label}: {money(slice.amount)}</title></path>
-              : <circle key={slice.label} cx="100" cy="100" r="82" fill={slice.color}><title>{slice.label}: {money(slice.amount)}</title></circle>)}
+              ? <path
+                key={slice.label}
+                d={slice.path}
+                fill={slice.color}
+                role="button"
+                tabIndex={0}
+                aria-label={`Show ${slice.label} transactions`}
+                onClick={() => onCategoryClick(month, slice.label)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onCategoryClick(month, slice.label);
+                  }
+                }}
+              ><title>{slice.label}: {money(slice.amount)}</title></path>
+              : <circle
+                key={slice.label}
+                cx="100"
+                cy="100"
+                r="82"
+                fill={slice.color}
+                role="button"
+                tabIndex={0}
+                aria-label={`Show ${slice.label} transactions`}
+                onClick={() => onCategoryClick(month, slice.label)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onCategoryClick(month, slice.label);
+                  }
+                }}
+              ><title>{slice.label}: {money(slice.amount)}</title></circle>)}
           </svg>
           <ul className="liquidity-legend">
             {slices.map((slice) => (
               <li key={slice.label}>
-                <span className="liquidity-legend-color" style={{ backgroundColor: slice.color }} />
-                <span className="liquidity-legend-label">{slice.label}</span>
-                <strong>{money(slice.amount)}</strong>
+                <button type="button" className="liquidity-category-button" onClick={() => onCategoryClick(month, slice.label)}>
+                  <span className="liquidity-legend-color" style={{ backgroundColor: slice.color }} />
+                  <span className="liquidity-legend-label">{slice.label}</span>
+                  <strong>{money(slice.amount)}</strong>
+                </button>
               </li>
             ))}
           </ul>
@@ -385,6 +438,7 @@ export default function App() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [transactionCategories, setTransactionCategories] = useState<TransactionCategory[]>([]);
   const [pendingCategoryChange, setPendingCategoryChange] = useState<{ item: Transaction; categoryID: string } | null>(null);
+  const [liquidityTransactionsDialog, setLiquidityTransactionsDialog] = useState<LiquidityTransactionsDialog | null>(null);
   const [dashboardLiquidity, setDashboardLiquidity] = useState<DashboardLiquidity | null>(null);
   const [liquidityLoading, setLiquidityLoading] = useState(false);
   const [selectedLiquidityMonthIndex, setSelectedLiquidityMonthIndex] = useState(1);
@@ -470,7 +524,7 @@ export default function App() {
   }, [monthPickerOpen]);
 
   useEffect(() => {
-    if (!sidebarOpen && !dashboardPreferencesOpen && !projectionAssumptionsOpen && !scheduledExpensesOpen && !pendingCategoryChange) return;
+    if (!sidebarOpen && !dashboardPreferencesOpen && !projectionAssumptionsOpen && !scheduledExpensesOpen && !pendingCategoryChange && !liquidityTransactionsDialog) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setSidebarOpen(false);
@@ -478,6 +532,7 @@ export default function App() {
         setProjectionAssumptionsOpen(false);
         setScheduledExpensesOpen(false);
         setPendingCategoryChange(null);
+        setLiquidityTransactionsDialog(null);
       }
     };
     const previousOverflow = document.body.style.overflow;
@@ -487,7 +542,7 @@ export default function App() {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [dashboardPreferencesOpen, pendingCategoryChange, projectionAssumptionsOpen, scheduledExpensesOpen, sidebarOpen]);
+  }, [dashboardPreferencesOpen, liquidityTransactionsDialog, pendingCategoryChange, projectionAssumptionsOpen, scheduledExpensesOpen, sidebarOpen]);
 
   function navigateToPage(page: "overview" | "administration" | "transactions" | "projections") {
     setActivePage(page);
@@ -859,6 +914,32 @@ export default function App() {
       setExcludedLiquidityTransactions(result.excluded_liquidity_transactions ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save transaction liquidity preference");
+    }
+  }
+
+  async function showLiquidityTransactions(month: LiquiditySpendMonth, category: string) {
+    const requestID = crypto.randomUUID();
+    setLiquidityTransactionsDialog({
+      requestID,
+      spendMonth: month.spend_month,
+      category,
+      transactions: [],
+      loading: true,
+      error: "",
+    });
+    const params = new URLSearchParams({
+      spend_month: month.spend_month,
+      category,
+    });
+    try {
+      const transactions = await api<LiquidityTransaction[]>(`/api/dashboard/liquidity/transactions?${params.toString()}`);
+      setLiquidityTransactionsDialog((current) => current?.requestID === requestID
+        ? { ...current, transactions, loading: false }
+        : current);
+    } catch (err) {
+      setLiquidityTransactionsDialog((current) => current?.requestID === requestID
+        ? { ...current, loading: false, error: err instanceof Error ? err.message : "Could not load category transactions" }
+        : current);
     }
   }
 
@@ -1959,6 +2040,49 @@ export default function App() {
           </div>
         )}
 
+        {liquidityTransactionsDialog && (
+          <div
+            className="liquidity-transactions-backdrop"
+            role="presentation"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setLiquidityTransactionsDialog(null);
+            }}
+          >
+            <section className="liquidity-transactions-dialog" role="dialog" aria-modal="true" aria-labelledby="liquidity-transactions-title">
+              <header className="liquidity-transactions-heading">
+                <div>
+                  <h2 id="liquidity-transactions-title">{liquidityTransactionsDialog.category}</h2>
+                  <p>{getStatisticsRange("spend", liquidityTransactionsDialog.spendMonth).label} · {liquidityTransactionsDialog.loading ? "Loading transactions…" : `${liquidityTransactionsDialog.transactions.length} transaction${liquidityTransactionsDialog.transactions.length === 1 ? "" : "s"}`}</p>
+                </div>
+                <button type="button" className="preferences-drawer-close" aria-label="Close category transactions" onClick={() => setLiquidityTransactionsDialog(null)}>
+                  <X size={18} />
+                </button>
+              </header>
+              <div className="liquidity-transactions-body" aria-live="polite">
+                {liquidityTransactionsDialog.loading ? (
+                  <div className="empty-state compact">Loading transactions…</div>
+                ) : liquidityTransactionsDialog.error ? (
+                  <div className="alert error-message">{liquidityTransactionsDialog.error}</div>
+                ) : liquidityTransactionsDialog.transactions.length === 0 ? (
+                  <div className="empty-state compact">No included transactions were found for this category.</div>
+                ) : (
+                  <ul className="liquidity-transactions-list">
+                    {liquidityTransactionsDialog.transactions.map((item) => (
+                      <li key={item.transaction_id}>
+                        <div>
+                          <strong>{item.merchant_name || item.name}</strong>
+                          <span>{displayDate(item.date)} · {item.account_name}</span>
+                        </div>
+                        <strong>{money(item.amount, item.iso_currency_code)}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </section>
+          </div>
+        )}
+
         {activePage === "administration" ? (
           profile?.role === "admin" ? (
             <>
@@ -2298,6 +2422,7 @@ export default function App() {
                       canGoNext={monthIndex < dashboardLiquidity.months.length - 1}
                       onPrevious={() => setSelectedLiquidityMonthIndex((index) => Math.max(0, index - 1))}
                       onNext={() => setSelectedLiquidityMonthIndex((index) => Math.min(dashboardLiquidity.months.length - 1, index + 1))}
+                      onCategoryClick={(month, category) => void showLiquidityTransactions(month, category)}
                     />
                   </div>
                 );

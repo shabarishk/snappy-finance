@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -23,6 +24,111 @@ type liquiditySpendMonth struct {
 type dashboardLiquidity struct {
 	Months                     []liquiditySpendMonth `json:"months"`
 	UnconfiguredCreditAccounts []string              `json:"unconfigured_credit_accounts"`
+}
+
+type liquidityTransaction struct {
+	TransactionID string  `json:"transaction_id"`
+	Name          string  `json:"name"`
+	MerchantName  *string `json:"merchant_name"`
+	Date          string  `json:"date"`
+	Amount        float64 `json:"amount"`
+	AccountName   string  `json:"account_name"`
+	Currency      *string `json:"iso_currency_code"`
+}
+
+func (a *app) getDashboardLiquidityTransactions(w http.ResponseWriter, r *http.Request) {
+	monthKey := r.URL.Query().Get("spend_month")
+	startMonth, err := time.Parse("2006-01", monthKey)
+	if err != nil || startMonth.Format("2006-01") != monthKey {
+		writeError(w, http.StatusBadRequest, "invalid spend month")
+		return
+	}
+	category := strings.TrimSpace(r.URL.Query().Get("category"))
+	if category == "" {
+		writeError(w, http.StatusBadRequest, "category is required")
+		return
+	}
+
+	var encodedPreferences []byte
+	user := currentPrincipal(r)
+	if err := a.db.QueryRow(r.Context(),
+		"SELECT dashboard_preferences FROM users WHERE id = $1", user.ID,
+	).Scan(&encodedPreferences); err != nil {
+		log.Printf("read liquidity transaction preferences: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load spend category transactions")
+		return
+	}
+	var preferences dashboardPreferences
+	if err := json.Unmarshal(encodedPreferences, &preferences); err != nil {
+		log.Printf("decode liquidity transaction preferences: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load spend category transactions")
+		return
+	}
+
+	rows, err := a.db.Query(r.Context(), `
+		SELECT txn.transaction_id, txn.name, txn.merchant_name, txn.transaction_date::text,
+			txn.amount, COALESCE(account.official_name, account.name), txn.iso_currency_code,
+			account.type, cycle.statement_close_day, cycle.statement_due_day,
+			category.label, txn.category_detailed, txn.category_primary
+		FROM transactions txn
+		JOIN accounts account USING (account_id)
+		LEFT JOIN credit_card_cycles cycle USING (account_id)
+		LEFT JOIN transaction_categories category ON category.category_id = txn.category_id
+		WHERE txn.amount > 0
+		  AND account.type IN ('depository', 'credit')
+		  AND ($1 OR NOT txn.hidden_from_users)
+		  AND NOT COALESCE(txn.category_id = ANY($2::text[]), FALSE)
+		  AND NOT COALESCE(txn.transaction_id = ANY($3::text[]), FALSE)
+		  AND NOT COALESCE(category.category_type = 'expense' AND category.excluded_from_totals, FALSE)
+		ORDER BY txn.transaction_date DESC, txn.transaction_id`,
+		user.Role == "admin", preferences.ExcludedSpendCategories, preferences.ExcludedLiquidityTransactions)
+	if err != nil {
+		log.Printf("query spend category transactions: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load spend category transactions")
+		return
+	}
+	transactions := make([]liquidityTransaction, 0)
+	for rows.Next() {
+		var item liquidityTransaction
+		var accountType string
+		var closeDay, dueDay *int16
+		var categoryLabel, detailed, primary *string
+		if err := rows.Scan(
+			&item.TransactionID, &item.Name, &item.MerchantName, &item.Date,
+			&item.Amount, &item.AccountName, &item.Currency, &accountType,
+			&closeDay, &dueDay, &categoryLabel, &detailed, &primary,
+		); err != nil {
+			rows.Close()
+			log.Printf("scan spend category transaction: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not load spend category transactions")
+			return
+		}
+		date, err := time.Parse("2006-01-02", item.Date)
+		if err != nil {
+			rows.Close()
+			log.Printf("parse spend category transaction date %q: %v", item.Date, err)
+			writeError(w, http.StatusInternalServerError, "could not load spend category transactions")
+			return
+		}
+		spendMonth, included := transactionSpendMonth(date, accountType, closeDay, dueDay)
+		if !included || spendMonth != monthKey {
+			continue
+		}
+		label := firstNonEmpty(categoryLabel, detailed, primary)
+		if label == "" {
+			label = "Uncategorized"
+		}
+		if label == category {
+			transactions = append(transactions, item)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		log.Printf("iterate spend category transactions: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load spend category transactions")
+		return
+	}
+	writeJSON(w, http.StatusOK, transactions)
 }
 
 func (a *app) getDashboardLiquidity(w http.ResponseWriter, r *http.Request) {

@@ -230,8 +230,13 @@ button { cursor: pointer; }
 .liquidity-chart-navigation button:disabled { cursor: not-allowed; opacity: .45; }
 .liquidity-chart-content { align-items: center; display: flex; gap: 14px; }
 .liquidity-pie { flex: 0 0 116px; height: 116px; width: 116px; }
+.liquidity-pie [role="button"] { cursor: pointer; }
+.liquidity-pie [role="button"]:focus-visible { outline: none; stroke: #172a25; stroke-width: 2px; }
 .liquidity-legend { display: flex; flex: 1; flex-direction: column; gap: 8px; list-style: none; margin: 0; min-width: 0; padding: 0; }
 .liquidity-legend li { align-items: center; display: grid; gap: 5px; grid-template-columns: 8px minmax(0, 1fr) auto; }
+.liquidity-category-button { align-items: center; background: none; border: 0; border-radius: 4px; color: inherit; cursor: pointer; display: grid; gap: 5px; grid-template-columns: 8px minmax(0, 1fr) auto; padding: 2px 3px; text-align: left; width: 100%; }
+.liquidity-category-button:hover .liquidity-legend-label { color: var(--green-dark); text-decoration: underline; }
+.liquidity-category-button:focus-visible { outline: 2px solid #78b89b; outline-offset: 2px; }
 .liquidity-legend-color { border-radius: 50%; height: 8px; width: 8px; }
 .liquidity-legend-label { color: #65736c; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .liquidity-legend strong { color: #52615a; font-size: 10px; font-weight: 600; white-space: nowrap; }
@@ -242,6 +247,19 @@ button { cursor: pointer; }
 .liquidity-forecast dd { color: #52615a; font-weight: 600; margin: 0; text-align: right; white-space: nowrap; }
 .liquidity-forecast .liquidity-forecast-remaining { border-top: 1px solid var(--line); color: #34463e; font-weight: 600; padding-top: 8px; }
 .liquidity-help { border-top: 1px solid var(--line); padding-top: 12px; }
+.liquidity-transactions-backdrop { align-items: center; background: #172a2555; display: flex; inset: 0; justify-content: center; padding: 16px; position: fixed; z-index: 1200; }
+.liquidity-transactions-dialog { background: white; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 18px 48px #172a2533; display: flex; flex-direction: column; max-height: 85vh; max-width: 700px; overflow: hidden; width: 100%; }
+.liquidity-transactions-heading { align-items: center; border-bottom: 1px solid var(--line); display: flex; flex: 0 0 auto; gap: 12px; justify-content: space-between; padding: 18px 22px; }
+.liquidity-transactions-heading h2 { color: #34463e; font-size: 15px; margin: 0; }
+.liquidity-transactions-heading p { color: var(--muted); font-size: 10px; margin: 5px 0 0; }
+.liquidity-transactions-body { min-height: 120px; overflow-y: auto; overscroll-behavior: contain; }
+.liquidity-transactions-list { list-style: none; margin: 0; padding: 0 22px; }
+.liquidity-transactions-list li { align-items: center; border-bottom: 1px solid #f0f2f0; display: flex; gap: 16px; justify-content: space-between; min-height: 62px; padding: 10px 0; }
+.liquidity-transactions-list li:last-child { border-bottom: 0; }
+.liquidity-transactions-list li div { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.liquidity-transactions-list li strong { color: #52615a; font-size: 11px; overflow-wrap: anywhere; }
+.liquidity-transactions-list li span { color: var(--muted); font-size: 10px; }
+.liquidity-transactions-list li > strong { flex: 0 0 auto; white-space: nowrap; }
 .account-group + .account-group { border-top: 1px solid var(--line); }
 .account-group-heading { align-items: center; color: #52615a; display: flex; justify-content: space-between; padding: 15px 0 4px; }
 .account-group-heading h3 { font-size: 11px; font-weight: 600; margin: 0; }
