@@ -29,6 +29,7 @@ type DashboardPreferences = {
   hidden_cards: string[];
   card_order: string[];
   excluded_spend_categories: string[];
+  excluded_liquidity_transactions: string[];
 };
 
 type DashboardMetrics = {
@@ -373,6 +374,7 @@ export default function App() {
   const [password, setPassword] = useState("");
   const [hiddenCards, setHiddenCards] = useState<string[]>([]);
   const [excludedSpendCategories, setExcludedSpendCategories] = useState<string[]>([]);
+  const [excludedLiquidityTransactions, setExcludedLiquidityTransactions] = useState<string[]>([]);
   const [cardOrder, setCardOrder] = useState(defaultDashboardCardOrder);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [newUsername, setNewUsername] = useState("");
@@ -527,6 +529,7 @@ export default function App() {
           setHiddenCards(preferences.hidden_cards);
           setCardOrder(normalizeDashboardCardOrder(preferences.card_order));
           setExcludedSpendCategories(preferences.excluded_spend_categories ?? []);
+          setExcludedLiquidityTransactions(preferences.excluded_liquidity_transactions ?? []);
           if (user.role === "admin") {
             setProfiles(await api<Profile[]>("/api/admin/users"));
           }
@@ -581,7 +584,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [excludedSpendCategories, metricsRefreshKey, profile]);
+  }, [excludedLiquidityTransactions, excludedSpendCategories, metricsRefreshKey, profile]);
 
   useEffect(() => {
     if (profile?.role !== "admin" || activePage !== "administration" || adminSection !== "finance") return;
@@ -785,6 +788,7 @@ export default function App() {
       setHiddenCards(preferences.hidden_cards);
       setCardOrder(normalizeDashboardCardOrder(preferences.card_order));
       setExcludedSpendCategories(preferences.excluded_spend_categories ?? []);
+      setExcludedLiquidityTransactions(preferences.excluded_liquidity_transactions ?? []);
       if (result.user.role === "admin") {
         setProfiles(await api<Profile[]>("/api/admin/users"));
       }
@@ -801,11 +805,17 @@ export default function App() {
     try {
       const result = await api<DashboardPreferences>("/api/me/preferences", {
         method: "PUT",
-        body: JSON.stringify({ hidden_cards: nextHidden, card_order: cardOrder, excluded_spend_categories: excludedSpendCategories }),
+        body: JSON.stringify({
+          hidden_cards: nextHidden,
+          card_order: cardOrder,
+          excluded_spend_categories: excludedSpendCategories,
+          excluded_liquidity_transactions: excludedLiquidityTransactions,
+        }),
       });
       setHiddenCards(result.hidden_cards);
       setCardOrder(normalizeDashboardCardOrder(result.card_order));
       setExcludedSpendCategories(result.excluded_spend_categories ?? []);
+      setExcludedLiquidityTransactions(result.excluded_liquidity_transactions ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save dashboard preferences");
     }
@@ -822,11 +832,33 @@ export default function App() {
           hidden_cards: hiddenCards,
           card_order: cardOrder,
           excluded_spend_categories: nextExcluded,
+          excluded_liquidity_transactions: excludedLiquidityTransactions,
         }),
       });
       setExcludedSpendCategories(result.excluded_spend_categories ?? []);
+      setExcludedLiquidityTransactions(result.excluded_liquidity_transactions ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save liquidity category preferences");
+    }
+  }
+
+  async function saveLiquidityTransaction(transactionID: string, excluded: boolean) {
+    const nextExcluded = excluded
+      ? [...excludedLiquidityTransactions, transactionID]
+      : excludedLiquidityTransactions.filter((id) => id !== transactionID);
+    try {
+      const result = await api<DashboardPreferences>("/api/me/preferences", {
+        method: "PUT",
+        body: JSON.stringify({
+          hidden_cards: hiddenCards,
+          card_order: cardOrder,
+          excluded_spend_categories: excludedSpendCategories,
+          excluded_liquidity_transactions: nextExcluded,
+        }),
+      });
+      setExcludedLiquidityTransactions(result.excluded_liquidity_transactions ?? []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save transaction liquidity preference");
     }
   }
 
@@ -839,11 +871,17 @@ export default function App() {
     try {
       const result = await api<DashboardPreferences>("/api/me/preferences", {
         method: "PUT",
-        body: JSON.stringify({ hidden_cards: hiddenCards, card_order: nextOrder, excluded_spend_categories: excludedSpendCategories }),
+        body: JSON.stringify({
+          hidden_cards: hiddenCards,
+          card_order: nextOrder,
+          excluded_spend_categories: excludedSpendCategories,
+          excluded_liquidity_transactions: excludedLiquidityTransactions,
+        }),
       });
       setHiddenCards(result.hidden_cards);
       setCardOrder(normalizeDashboardCardOrder(result.card_order));
       setExcludedSpendCategories(result.excluded_spend_categories ?? []);
+      setExcludedLiquidityTransactions(result.excluded_liquidity_transactions ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save dashboard card order");
     }
@@ -1212,29 +1250,41 @@ export default function App() {
                   <span className={`transaction-icon ${item.amount < 0 ? "income-icon" : ""}`}>{item.amount < 0 ? <ArrowDownLeft size={17} /> : <ArrowUpRight size={17} />}</span>
                   <div className="transaction-info"><strong>{item.merchant_name || item.name}</strong><span>{transactionCategories.find((category) => category.category_id === item.category_id)?.label || item.category_detailed || item.category_primary || "Uncategorized"} · {new Date(`${item.date}T12:00:00`).toLocaleDateString()} · {accountsByID.get(item.account_id)?.official_name || accountsByID.get(item.account_id)?.name || "Unknown account"}</span></div>
                   <strong className={item.amount < 0 ? "positive-text" : ""}>{item.amount < 0 ? "+" : "−"}{money(Math.abs(item.amount), item.iso_currency_code)}{item.pending && <small className="pending"> Pending</small>}</strong>
-                  {profile?.role === "admin" && (
+                  {(profile?.role === "admin" || (item.amount > 0 && ["depository", "credit"].includes(accountsByID.get(item.account_id)?.type.toLowerCase() ?? ""))) && (
                     <div className="transaction-actions">
-                      <select
-                        className="category-select"
-                        value={item.category_id ?? ""}
-                        aria-label={`Category for ${item.merchant_name || item.name}`}
-                        onChange={(event) => requestTransactionCategoryChange(item, event.target.value)}
-                      >
-                        <option value="">Bank category</option>
-                        {transactionCategories.filter((category) => category.category_type === (item.amount < 0 ? "income" : "expense")).map((category) => (
-                          <option key={category.category_id} value={category.category_id}>{category.label}</option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        className="visibility-button"
-                        onClick={() => void setTransactionVisibility(item)}
-                        aria-label={item.hidden_from_users ? "Show transaction to household users" : "Hide transaction from household users"}
-                        title={item.hidden_from_users ? "Show to household users" : "Hide from household users"}
-                      >
-                        {item.hidden_from_users ? <Eye size={15} /> : <EyeOff size={15} />}
-                        <span>{item.hidden_from_users ? "Show" : "Hide"}</span>
-                      </button>
+                      {item.amount > 0 && ["depository", "credit"].includes(accountsByID.get(item.account_id)?.type.toLowerCase() ?? "") && (
+                        <label className="transaction-liquidity-toggle" title="Only affects your liquidity chart and forecast">
+                          <input
+                            type="checkbox"
+                            checked={excludedLiquidityTransactions.includes(item.transaction_id)}
+                            onChange={(event) => void saveLiquidityTransaction(item.transaction_id, event.target.checked)}
+                          />
+                          Exclude from liquidity
+                        </label>
+                      )}
+                      {profile?.role === "admin" && <>
+                        <select
+                          className="category-select"
+                          value={item.category_id ?? ""}
+                          aria-label={`Category for ${item.merchant_name || item.name}`}
+                          onChange={(event) => requestTransactionCategoryChange(item, event.target.value)}
+                        >
+                          <option value="">Bank category</option>
+                          {transactionCategories.filter((category) => category.category_type === (item.amount < 0 ? "income" : "expense")).map((category) => (
+                            <option key={category.category_id} value={category.category_id}>{category.label}</option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          className="visibility-button"
+                          onClick={() => void setTransactionVisibility(item)}
+                          aria-label={item.hidden_from_users ? "Show transaction to household users" : "Hide transaction from household users"}
+                          title={item.hidden_from_users ? "Show to household users" : "Hide from household users"}
+                        >
+                          {item.hidden_from_users ? <Eye size={15} /> : <EyeOff size={15} />}
+                          <span>{item.hidden_from_users ? "Show" : "Hide"}</span>
+                        </button>
+                      </>}
                     </div>
                   )}
                 </div>

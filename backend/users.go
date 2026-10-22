@@ -15,9 +15,10 @@ import (
 )
 
 type dashboardPreferences struct {
-	HiddenCards             []string `json:"hidden_cards"`
-	CardOrder               []string `json:"card_order"`
-	ExcludedSpendCategories []string `json:"excluded_spend_categories"`
+	HiddenCards                   []string `json:"hidden_cards"`
+	CardOrder                     []string `json:"card_order"`
+	ExcludedSpendCategories       []string `json:"excluded_spend_categories"`
+	ExcludedLiquidityTransactions []string `json:"excluded_liquidity_transactions"`
 }
 
 type userSummary struct {
@@ -202,6 +203,9 @@ func (a *app) getPreferences(w http.ResponseWriter, r *http.Request) {
 	if preferences.ExcludedSpendCategories == nil {
 		preferences.ExcludedSpendCategories = []string{}
 	}
+	if preferences.ExcludedLiquidityTransactions == nil {
+		preferences.ExcludedLiquidityTransactions = []string{}
+	}
 	if len(preferences.CardOrder) == 0 {
 		preferences.CardOrder = append([]string(nil), defaultDashboardCardOrder...)
 	}
@@ -215,7 +219,7 @@ func (a *app) updatePreferences(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := currentPrincipal(r)
-	if preferences.ExcludedSpendCategories == nil {
+	if preferences.ExcludedSpendCategories == nil || preferences.ExcludedLiquidityTransactions == nil {
 		var encoded []byte
 		if err := a.db.QueryRow(r.Context(), "SELECT dashboard_preferences FROM users WHERE id = $1", user.ID).Scan(&encoded); err != nil {
 			log.Printf("read existing dashboard preferences: %v", err)
@@ -228,9 +232,15 @@ func (a *app) updatePreferences(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "could not save dashboard preferences")
 			return
 		}
-		preferences.ExcludedSpendCategories = existing.ExcludedSpendCategories
+		if preferences.ExcludedSpendCategories == nil {
+			preferences.ExcludedSpendCategories = existing.ExcludedSpendCategories
+		}
+		if preferences.ExcludedLiquidityTransactions == nil {
+			preferences.ExcludedLiquidityTransactions = existing.ExcludedLiquidityTransactions
+		}
 	}
 	preferences.ExcludedSpendCategories = uniqueStrings(preferences.ExcludedSpendCategories)
+	preferences.ExcludedLiquidityTransactions = uniqueStrings(preferences.ExcludedLiquidityTransactions)
 	validCategories := make(map[string]struct{}, len(preferences.ExcludedSpendCategories))
 	if len(preferences.ExcludedSpendCategories) > 0 {
 		rows, err := a.db.Query(r.Context(), `

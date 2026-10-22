@@ -117,8 +117,9 @@ func (a *app) getDashboardLiquidity(w http.ResponseWriter, r *http.Request) {
 		  AND account.type IN ('depository', 'credit')
 		  AND ($1 OR NOT txn.hidden_from_users)
 		  AND NOT COALESCE(txn.category_id = ANY($2::text[]), FALSE)
+		  AND NOT COALESCE(txn.transaction_id = ANY($3::text[]), FALSE)
 		  AND NOT COALESCE(category.category_type = 'expense' AND category.excluded_from_totals, FALSE)`,
-		isAdmin, preferences.ExcludedSpendCategories)
+		isAdmin, preferences.ExcludedSpendCategories, preferences.ExcludedLiquidityTransactions)
 	if err != nil {
 		log.Printf("query dashboard liquidity transactions: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not load dashboard liquidity")
