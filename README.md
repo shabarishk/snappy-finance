@@ -9,6 +9,7 @@ A self-hosted personal finance app scaffold using Go, React, PostgreSQL, and Pla
 - Administrators can hide selected transactions from household users while retaining access to them.
 - Administrators can categorize expense transactions separately from income and transfer transactions, and exclude categories from monthly spending or income totals.
 - Transportation/Mobility is available as an expense category. When categorizing a transaction with a stable automated match, administrators can apply the category to that item only or to all related past and future matches.
+- Gaming is available as an expense category, and Plaid food-and-drink categories for other food and drink, fast food, restaurants, and coffee are mapped to Restaurants unless a transaction-specific or merchant rule overrides the bank category.
 - The dashboard's first summary card defaults to expendable income, based on transactions assigned the Expendable income category, and can be toggled to total income.
 - Dashboard income, spending, and net statistics default to the spend calendar from the 4th through the 3rd; switch to calendar month from Dashboard preferences.
 - The Overview heading opens a calendar-month selector; its history begins one year before first use in the browser and grows as new months arrive.

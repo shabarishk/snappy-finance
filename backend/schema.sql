@@ -144,6 +144,7 @@ INSERT INTO transaction_categories (category_id, label, category_type) VALUES
     ('transportation_mobility', 'Transportation/Mobility', 'expense'),
     ('investments', 'Investments', 'expense'),
     ('schooling', 'Schooling', 'expense'),
+    ('gaming', 'Gaming', 'expense'),
     ('other', 'Other', 'expense'),
     ('income', 'Income', 'income'),
     ('transfer', 'Transfer', 'income'),
@@ -187,6 +188,21 @@ AS $$
         ELSE name_key
     END
     FROM normalized;
+$$;
+
+CREATE OR REPLACE FUNCTION transaction_bank_category_mapping(p_category_detailed TEXT)
+RETURNS TEXT
+LANGUAGE SQL
+IMMUTABLE
+AS $$
+    SELECT CASE
+        WHEN p_category_detailed IN (
+            'FOOD_AND_DRINK_OTHER_FOOD_AND_DRINK',
+            'FOOD_AND_DRINK_FAST_FOOD',
+            'FOOD_AND_DRINK_RESTAURANT',
+            'FOOD_AND_DRINK_COFFEE'
+        ) THEN 'restaurants'
+    END;
 $$;
 
 CREATE TABLE IF NOT EXISTS transactions (
@@ -266,6 +282,17 @@ WHERE t.category_match_key = r.match_key
   AND r.category_type = CASE WHEN t.amount < 0 THEN 'income' ELSE 'expense' END
   AND t.category_rule_exempt = FALSE
   AND t.category_id IS DISTINCT FROM r.category_id;
+
+UPDATE transactions t
+SET category_id = transaction_bank_category_mapping(t.category_detailed)
+WHERE t.category_rule_exempt = FALSE
+  AND transaction_bank_category_mapping(t.category_detailed) IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1
+      FROM transaction_category_rules r
+      WHERE r.match_key = t.category_match_key
+        AND r.category_type = CASE WHEN t.amount < 0 THEN 'income' ELSE 'expense' END
+  );
 
 CREATE INDEX IF NOT EXISTS transactions_date_idx ON transactions (transaction_date DESC);
 CREATE INDEX IF NOT EXISTS transactions_account_date_idx ON transactions (account_id, transaction_date DESC);

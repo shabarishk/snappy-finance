@@ -705,17 +705,20 @@ func (a *app) persistTransactionPage(ctx context.Context, itemID string, result 
 			) VALUES (
 				$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
 				transaction_category_match_key($5, $4, $3, ($6::numeric < 0::numeric)),
-				(SELECT category_id
-				 FROM transaction_category_rules
-				 WHERE match_key = transaction_category_match_key($5, $4, $3, ($6::numeric < 0::numeric))
-				   AND category_type = CASE WHEN $6::numeric < 0::numeric THEN 'income' ELSE 'expense' END)
+				COALESCE(
+					(SELECT category_id
+					 FROM transaction_category_rules
+					 WHERE match_key = transaction_category_match_key($5, $4, $3, ($6::numeric < 0::numeric))
+					   AND category_type = CASE WHEN $6::numeric < 0::numeric THEN 'income' ELSE 'expense' END),
+					transaction_bank_category_mapping($10)
+				)
 			)
 			ON CONFLICT (transaction_id) DO UPDATE SET
 				account_id=EXCLUDED.account_id, name=EXCLUDED.name, merchant_name=EXCLUDED.merchant_name,
 				amount=EXCLUDED.amount, transaction_date=EXCLUDED.transaction_date, pending=EXCLUDED.pending,
 				category_primary=EXCLUDED.category_primary, category_detailed=EXCLUDED.category_detailed,
 				iso_currency_code=EXCLUDED.iso_currency_code, category_match_key=EXCLUDED.category_match_key,
-				category_id=CASE WHEN transactions.category_rule_exempt THEN NULL ELSE EXCLUDED.category_id END,
+				category_id=CASE WHEN transactions.category_rule_exempt THEN transactions.category_id ELSE EXCLUDED.category_id END,
 				updated_at=NOW()`,
 			item.TransactionID, itemID, item.AccountID, item.Name, item.MerchantName, item.Amount,
 			item.Date, item.Pending, item.PersonalFinanceCategory.Primary,
