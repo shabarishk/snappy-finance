@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, Banknote, ChevronDown, Eye, EyeOff, Filter, Landmark, LockKeyhole, LogOut, Menu, RefreshCw, UsersRound, Wallet, X } from "lucide-react";
+import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, Banknote, ChevronDown, ChevronLeft, ChevronRight, Eye, EyeOff, Filter, Landmark, LockKeyhole, LogOut, Menu, RefreshCw, UsersRound, Wallet, X } from "lucide-react";
 
 type Profile = {
   id: string;
@@ -180,7 +180,21 @@ type DashboardLiquidity = {
 
 const liquidityChartColors = ["#198568", "#4a9b78", "#79b58e", "#a6c89e", "#d0d99c", "#e5b86d", "#d98268", "#9e829b", "#6f8ba5"];
 
-function SpendingPieChart({ month, showForecast }: { month: LiquiditySpendMonth; showForecast: boolean }) {
+function SpendingPieChart({
+  month,
+  showForecast,
+  canGoPrevious,
+  canGoNext,
+  onPrevious,
+  onNext,
+}: {
+  month: LiquiditySpendMonth;
+  showForecast: boolean;
+  canGoPrevious: boolean;
+  canGoNext: boolean;
+  onPrevious: () => void;
+  onNext: () => void;
+}) {
   const total = month.categories.reduce((sum, category) => sum + category.amount, 0);
   const projectedLiquidity = month.projected_expendable_income === null
     ? null
@@ -205,8 +219,18 @@ function SpendingPieChart({ month, showForecast }: { month: LiquiditySpendMonth;
   return (
     <article className="liquidity-month">
       <div className="liquidity-month-heading">
-        <h3>{new Date(year, monthNumber - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" })}</h3>
-        <span>{periodLabel}</span>
+        <div>
+          <h3>{new Date(year, monthNumber - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" })}</h3>
+          <span>{periodLabel}</span>
+        </div>
+        <div className="liquidity-chart-navigation" aria-label="Spend month charts">
+          <button type="button" aria-label="Previous spend month chart" onClick={onPrevious} disabled={!canGoPrevious}>
+            <ChevronLeft size={18} />
+          </button>
+          <button type="button" aria-label="Following spend month chart" onClick={onNext} disabled={!canGoNext}>
+            <ChevronRight size={18} />
+          </button>
+        </div>
       </div>
       {total > 0 ? (
         <div className="liquidity-chart-content">
@@ -356,6 +380,7 @@ export default function App() {
   const [transactionCategories, setTransactionCategories] = useState<TransactionCategory[]>([]);
   const [dashboardLiquidity, setDashboardLiquidity] = useState<DashboardLiquidity | null>(null);
   const [liquidityLoading, setLiquidityLoading] = useState(false);
+  const [selectedLiquidityMonthIndex, setSelectedLiquidityMonthIndex] = useState(1);
   const [dashboardMetrics, setDashboardMetrics] = useState<DashboardMetrics>({
     current_expendable_balance: null,
     current_total_credit_balance: 0,
@@ -2076,11 +2101,22 @@ export default function App() {
             <div className="empty-state">Loading spend-month expenses…</div>
           ) : dashboardLiquidity ? (
             <>
-              <div className="liquidity-month-grid">
-                {dashboardLiquidity.months.map((month, index) => (
-                  <SpendingPieChart key={month.spend_month} month={month} showForecast={index > 0} />
-                ))}
-              </div>
+              {dashboardLiquidity.months.length > 0 && (() => {
+                const monthIndex = Math.min(selectedLiquidityMonthIndex, dashboardLiquidity.months.length - 1);
+                return (
+                  <div className="liquidity-month-grid">
+                    <SpendingPieChart
+                      key={dashboardLiquidity.months[monthIndex].spend_month}
+                      month={dashboardLiquidity.months[monthIndex]}
+                      showForecast={monthIndex > 0}
+                      canGoPrevious={monthIndex > 0}
+                      canGoNext={monthIndex < dashboardLiquidity.months.length - 1}
+                      onPrevious={() => setSelectedLiquidityMonthIndex((index) => Math.max(0, index - 1))}
+                      onNext={() => setSelectedLiquidityMonthIndex((index) => Math.min(dashboardLiquidity.months.length - 1, index + 1))}
+                    />
+                  </div>
+                );
+              })()}
               {dashboardLiquidity.unconfigured_credit_accounts.length > 0 && (
                 <p className="finance-help liquidity-help">
                   Configure statement timing for {dashboardLiquidity.unconfigured_credit_accounts.join(", ")} in Administration → Financial management to include their credit purchases.
