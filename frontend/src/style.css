@@ -185,6 +185,8 @@ button { cursor: pointer; }
 .projection-pay-period strong { color: #52615a; font-size: 10px; white-space: nowrap; }
 .projection-scheduled-total { align-items: center; color: #bd554b; display: flex; font-size: 10px; font-weight: 600; gap: 10px; justify-content: flex-end; margin-top: 7px; }
 .projection-scheduled-total strong { font-size: 12px; }
+.projection-liquidity { align-items: center; color: #2877b9; display: flex; font-size: 10px; font-weight: 600; gap: 10px; justify-content: flex-end; margin-top: 6px; }
+.projection-liquidity strong { font-size: 12px; }
 .projection-details-grid { display: grid; gap: 18px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 10px; }
 .projection-detail-column { min-width: 0; }
 .projection-detail-column h4 { color: #52615a; font-size: 10px; margin: 0; }

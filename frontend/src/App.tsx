@@ -1387,6 +1387,14 @@ export default function App() {
                     <strong>−{money(period.scheduled_expense_total)}</strong>
                   </div>
                 )}
+                <div className="projection-liquidity">
+                  <span>Liquidity</span>
+                  <strong>
+                    {period.projected_expendable_income === null
+                      ? "Incomplete"
+                      : money(period.projected_expendable_income - period.scheduled_expense_total)}
+                  </strong>
+                </div>
                 {period.your_pay_total === null && <p className="projection-warning">Enter Saby’s net pay and a payday anchor to calculate this portion.</p>}
                 {period.missing_workday_counts.length > 0 && (
                   <p className="projection-warning">Missing Jan’s pay rate{period.missing_workday_counts.length === 1 ? "" : "s"} for {period.missing_workday_counts.join(", ")} workday{period.missing_workday_counts.length === 1 ? "" : "s"}.</p>
