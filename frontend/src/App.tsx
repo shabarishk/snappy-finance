@@ -361,6 +361,7 @@ export default function App() {
   const [monthHistoryStart, setMonthHistoryStart] = useState(() => getInitialMonthHistoryStart());
   const [monthPickerOpen, setMonthPickerOpen] = useState(false);
   const [transactionTab, setTransactionTab] = useState<TransactionTabID>("depository");
+  const [selectedTransactionAccountIDs, setSelectedTransactionAccountIDs] = useState<string[] | null>(null);
   const [transactionPage, setTransactionPage] = useState(1);
   const [transactionPageSize, setTransactionPageSize] = useState(25);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -698,6 +699,10 @@ export default function App() {
   );
   const totalCashBalance = cashAccounts.reduce((sum, account) => sum + (account.current_balance ?? 0), 0);
 
+  const accountsByID = useMemo(
+    () => new Map(accounts.map((account) => [account.account_id, account])),
+    [accounts],
+  );
   const transactionTabs = useMemo(() => {
     const accountTypes = new Map(accounts.map((account) => [account.account_id, account.type.toLowerCase()]));
     const knownTypes = new Set(["depository", "credit", "loan"]);
@@ -713,15 +718,21 @@ export default function App() {
   const activeTransactionTab = transactionTabs.some((tab) => tab.id === transactionTab)
     ? transactionTab
     : "depository";
+  const transactionAccounts = useMemo(
+    () => accounts.filter((account) => activeTransactionTab === "other"
+      ? !["depository", "credit", "loan"].includes(account.type.toLowerCase())
+      : account.type.toLowerCase() === activeTransactionTab),
+    [accounts, activeTransactionTab],
+  );
   const visibleTransactions = useMemo(() => {
-    const accountTypes = new Map(accounts.map((account) => [account.account_id, account.type.toLowerCase()]));
     return transactions.filter((item) => {
-      const type = accountTypes.get(item.account_id) ?? "";
-      return activeTransactionTab === "other"
+      const type = accountsByID.get(item.account_id)?.type.toLowerCase() ?? "";
+      const matchesType = activeTransactionTab === "other"
         ? !["depository", "credit", "loan"].includes(type)
         : type === activeTransactionTab;
+      return matchesType && (selectedTransactionAccountIDs === null || selectedTransactionAccountIDs.includes(item.account_id));
     });
-  }, [accounts, activeTransactionTab, transactions]);
+  }, [accountsByID, activeTransactionTab, selectedTransactionAccountIDs, transactions]);
   const transactionPageCount = Math.max(1, Math.ceil(visibleTransactions.length / transactionPageSize));
   const currentTransactionPage = Math.min(transactionPage, transactionPageCount);
   const pageTransactions = useMemo(() => {
@@ -744,6 +755,16 @@ export default function App() {
   const currentPeriodLabel = statisticsPeriod === "spend"
     ? selectedOverviewMonth === currentSpendMonth ? "THIS CYCLE" : "SPEND CYCLE"
     : selectedOverviewMonth === latestOverviewMonth ? "THIS MONTH" : "SELECTED MONTH";
+
+  function updateTransactionAccountSelection(accountID: string, checked: boolean) {
+    setSelectedTransactionAccountIDs((current) => {
+      const selected = current ?? transactionAccounts.map((account) => account.account_id);
+      return checked
+        ? [...new Set([...selected, accountID])]
+        : selected.filter((id) => id !== accountID);
+    });
+    setTransactionPage(1);
+  }
 
   async function signIn(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1102,12 +1123,39 @@ export default function App() {
               aria-pressed={activeTransactionTab === tab.id}
               onClick={() => {
                 setTransactionTab(tab.id);
+                setSelectedTransactionAccountIDs(null);
                 setTransactionPage(1);
               }}
             >{tab.label}</button>
           ))}
         </div>
         <div className="transactions-content">
+          {transactionAccounts.length > 1 && (
+            <div className="transaction-account-filters" role="group" aria-label="Filter transactions by account">
+              <strong>Accounts</strong>
+              <label className="transaction-account-filter">
+                <input
+                  type="checkbox"
+                  checked={selectedTransactionAccountIDs === null || transactionAccounts.every((account) => selectedTransactionAccountIDs.includes(account.account_id))}
+                  onChange={(event) => {
+                    setSelectedTransactionAccountIDs(event.target.checked ? null : []);
+                    setTransactionPage(1);
+                  }}
+                />
+                All accounts
+              </label>
+              {transactionAccounts.map((account) => (
+                <label className="transaction-account-filter" key={account.account_id}>
+                  <input
+                    type="checkbox"
+                    checked={selectedTransactionAccountIDs === null || selectedTransactionAccountIDs.includes(account.account_id)}
+                    onChange={(event) => updateTransactionAccountSelection(account.account_id, event.target.checked)}
+                  />
+                  {account.official_name || account.name}{account.mask ? ` ···· ${account.mask}` : ""}
+                </label>
+              ))}
+            </div>
+          )}
           <div className="transaction-list-toolbar">
             <span>Showing {firstTransactionNumber}–{lastTransactionNumber} of {visibleTransactions.length}</span>
             <label className="page-size-control">
@@ -1130,14 +1178,16 @@ export default function App() {
             <div className="empty-state compact">
               {transactions.length === 0
                 ? "Transactions will appear here after your first account sync."
-                : `No transactions for ${transactionTabs.find((tab) => tab.id === activeTransactionTab)?.label.toLowerCase() ?? "this account type"} yet.`}
+                : selectedTransactionAccountIDs !== null && selectedTransactionAccountIDs.length === 0
+                  ? "Select one or more accounts to see transactions."
+                  : `No transactions for ${transactionTabs.find((tab) => tab.id === activeTransactionTab)?.label.toLowerCase() ?? "this account type"} yet.`}
             </div>
           ) : (
             <div className="transaction-list">
               {pageTransactions.map((item) => (
                 <div className={`transaction-row ${item.hidden_from_users ? "hidden-transaction" : ""}`} key={item.transaction_id}>
                   <span className={`transaction-icon ${item.amount < 0 ? "income-icon" : ""}`}>{item.amount < 0 ? <ArrowDownLeft size={17} /> : <ArrowUpRight size={17} />}</span>
-                  <div className="transaction-info"><strong>{item.merchant_name || item.name}</strong><span>{transactionCategories.find((category) => category.category_id === item.category_id)?.label || item.category_detailed || item.category_primary || "Uncategorized"} · {new Date(`${item.date}T12:00:00`).toLocaleDateString()}</span></div>
+                  <div className="transaction-info"><strong>{item.merchant_name || item.name}</strong><span>{transactionCategories.find((category) => category.category_id === item.category_id)?.label || item.category_detailed || item.category_primary || "Uncategorized"} · {new Date(`${item.date}T12:00:00`).toLocaleDateString()} · {accountsByID.get(item.account_id)?.official_name || accountsByID.get(item.account_id)?.name || "Unknown account"}</span></div>
                   <strong className={item.amount < 0 ? "positive-text" : ""}>{item.amount < 0 ? "+" : "−"}{money(Math.abs(item.amount), item.iso_currency_code)}{item.pending && <small className="pending"> Pending</small>}</strong>
                   {profile?.role === "admin" && (
                     <div className="transaction-actions">

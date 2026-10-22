@@ -27,6 +27,7 @@ A self-hosted personal finance app scaffold using Go, React, PostgreSQL, and Pla
 - Cursor-based Plaid Transactions Sync with added, modified, and removed transaction handling.
 - Periodic sync worker and a manual sync action.
 - React dashboard for linked accounts and a separate Transactions page with cash, credit, and loan account tabs and selectable 25/50/75/100-item pages.
+- The Transactions page displays each transaction's account and supports multi-account filtering within the active account type.
 - Docker Compose deployment with PostgreSQL data persisted in a named volume.
 
 ## Run locally with Docker

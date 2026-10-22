@@ -95,6 +95,10 @@ button { cursor: pointer; }
 .transaction-tab.active { background: #f0f8f3; border-left-color: var(--green); color: var(--green-dark); }
 .transaction-tab:focus-visible { outline: 2px solid #78b89b; outline-offset: -2px; }
 .transactions-content { min-width: 0; }
+.transaction-account-filters { align-items: center; background: #fbfcfb; border-bottom: 1px solid #eff1ef; display: flex; flex-wrap: wrap; gap: 9px 16px; padding: 11px 22px; }
+.transaction-account-filters > strong { color: #52615a; font-size: 10px; }
+.transaction-account-filter { align-items: center; color: #65736c; display: inline-flex; font-size: 10px; gap: 6px; max-width: 100%; }
+.transaction-account-filter input { accent-color: var(--green); margin: 0; }
 .transaction-list-toolbar { align-items: center; border-bottom: 1px solid #eff1ef; color: var(--muted); display: flex; font-size: 10px; gap: 12px; justify-content: space-between; padding: 12px 22px; }
 .page-size-control { align-items: center; color: #52615a; display: flex; gap: 8px; white-space: nowrap; }
 .page-size-control select { background: white; border: 1px solid #dfe6e1; border-radius: 6px; color: #52615a; font-size: 11px; height: 36px; padding: 0 8px; }
@@ -304,6 +308,7 @@ footer { color: #9aa39e; font-size: 10px; padding: 6px 0 16px; }
   .topbar-actions { width: 100%; }
   .topbar-actions button { flex: 1; }
   .panel-heading, .account-list, .transaction-list { padding-left: 15px; padding-right: 15px; }
+  .transaction-account-filters { padding-left: 15px; padding-right: 15px; }
 }
 
 @media (max-width: 720px) and (orientation: portrait) {
@@ -382,6 +387,7 @@ footer { color: #9aa39e; font-size: 10px; padding: 6px 0 16px; }
   .panel-heading, .account-list, .transaction-list { padding-left: 12px; padding-right: 12px; }
   .transaction-tabs { padding-left: 8px; padding-right: 8px; }
   .transaction-list-toolbar { padding-left: 12px; padding-right: 12px; }
+  .transaction-account-filters { padding-left: 12px; padding-right: 12px; }
 }
 
 @media (pointer: coarse) {

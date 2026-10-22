@@ -148,6 +148,10 @@ INSERT INTO transaction_categories (category_id, label, category_type) VALUES
     ('expendable_income', 'Expendable income', 'income')
 ON CONFLICT (category_id) DO NOTHING;
 
+UPDATE transaction_categories
+SET label = 'Subscriptions/Streaming'
+WHERE category_id = 'streaming' AND label IS DISTINCT FROM 'Subscriptions/Streaming';
+
 DROP FUNCTION IF EXISTS transaction_category_match_key(TEXT, TEXT);
 
 CREATE OR REPLACE FUNCTION transaction_category_match_key(
