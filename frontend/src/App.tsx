@@ -47,10 +47,40 @@ type ManualCreditStatement = {
 
 type FinanceSettings = {
   expendable_cash_account_id: string | null;
-  current_spend_month_start: string;
-  projected_expendable_income: number | null;
   manual_statements: ManualCreditStatement[];
   plaid_statements: ManualCreditStatement[];
+};
+
+type ProjectionSettings = {
+  biweekly_pay_amount: number | null;
+  biweekly_payday_anchor: string | null;
+  wife_pay_rates: Record<string, number>;
+  federal_holidays: string[];
+  days_off: string[];
+};
+
+type WifePayProjection = {
+  pay_date: string;
+  work_period_start: string;
+  work_period_end: string;
+  workdays: number;
+  amount: number | null;
+};
+
+type IncomeProjectionPeriod = {
+  spend_month_start: string;
+  spend_month_end: string;
+  your_pay_total: number | null;
+  wife_pay_total: number | null;
+  projected_expendable_income: number | null;
+  wife_pay_periods: WifePayProjection[];
+  missing_workday_counts: number[];
+};
+
+type ProjectionData = {
+  settings: ProjectionSettings;
+  federal_holiday_options: { id: string; label: string }[];
+  periods: IncomeProjectionPeriod[];
 };
 
 type Account = {
@@ -167,12 +197,18 @@ function getStatisticsRange(period: "spend" | "calendar", selectedMonth: string)
   };
 }
 
+function displayDate(date: string, options: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", year: "numeric" }) {
+  const [year, month, day] = date.slice(0, 10).split("-").map(Number);
+  return new Date(year, month - 1, day).toLocaleDateString(undefined, options);
+}
+
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [activePage, setActivePage] = useState<"overview" | "administration" | "transactions">(() => {
+  const [activePage, setActivePage] = useState<"overview" | "administration" | "transactions" | "projections">(() => {
     if (window.location.hash === "#administration") return "administration";
     if (window.location.hash === "#transactions") return "transactions";
+    if (window.location.hash === "#projections") return "projections";
     return "overview";
   });
   const [adminSection, setAdminSection] = useState<"users" | "finance">("users");
@@ -208,10 +244,18 @@ export default function App() {
   const [financeSettings, setFinanceSettings] = useState<FinanceSettings | null>(null);
   const [financeSettingsLoading, setFinanceSettingsLoading] = useState(false);
   const [expendableAccountSelection, setExpendableAccountSelection] = useState("");
-  const [projectedIncomeInput, setProjectedIncomeInput] = useState("");
   const [statementAccountSelection, setStatementAccountSelection] = useState("");
   const [statementDueDate, setStatementDueDate] = useState(() => transactionDateKey(new Date()));
   const [statementBalanceInput, setStatementBalanceInput] = useState("");
+  const [projectionData, setProjectionData] = useState<ProjectionData | null>(null);
+  const [projectionRefreshKey, setProjectionRefreshKey] = useState(0);
+  const [projectionLoading, setProjectionLoading] = useState(false);
+  const [projectionPayAmount, setProjectionPayAmount] = useState("");
+  const [projectionPaydayAnchor, setProjectionPaydayAnchor] = useState("");
+  const [wifePayRates, setWifePayRates] = useState<Record<string, string>>({});
+  const [selectedFederalHolidays, setSelectedFederalHolidays] = useState<string[]>([]);
+  const [projectionDaysOff, setProjectionDaysOff] = useState<string[]>([]);
+  const [newProjectionDayOff, setNewProjectionDayOff] = useState("");
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -222,6 +266,7 @@ export default function App() {
     const syncPageFromHash = () => {
       if (window.location.hash === "#administration") setActivePage("administration");
       else if (window.location.hash === "#transactions") setActivePage("transactions");
+      else if (window.location.hash === "#projections") setActivePage("projections");
       else setActivePage("overview");
     };
     window.addEventListener("hashchange", syncPageFromHash);
@@ -284,7 +329,7 @@ export default function App() {
     };
   }, [dashboardPreferencesOpen, sidebarOpen]);
 
-  function navigateToPage(page: "overview" | "administration" | "transactions") {
+  function navigateToPage(page: "overview" | "administration" | "transactions" | "projections") {
     setActivePage(page);
     setSidebarOpen(false);
     setDashboardPreferencesOpen(false);
@@ -366,7 +411,6 @@ export default function App() {
         if (cancelled) return;
         setFinanceSettings(settings);
         setExpendableAccountSelection(settings.expendable_cash_account_id ?? "");
-        setProjectedIncomeInput(settings.projected_expendable_income?.toString() ?? "");
         if (!statementAccountSelection) {
           setStatementAccountSelection(accounts.find((account) => account.type.toLowerCase() === "credit")?.account_id ?? "");
         }
@@ -381,6 +425,33 @@ export default function App() {
       cancelled = true;
     };
   }, [activePage, adminSection, accounts, profile, metricsRefreshKey, statementAccountSelection]);
+
+  useEffect(() => {
+    if (!profile || activePage !== "projections") return;
+    let cancelled = false;
+    setProjectionLoading(true);
+    api<ProjectionData>("/api/projections")
+      .then((data) => {
+        if (cancelled) return;
+        setProjectionData(data);
+        setProjectionPayAmount(data.settings.biweekly_pay_amount?.toString() ?? "");
+        setProjectionPaydayAnchor(data.settings.biweekly_payday_anchor?.slice(0, 10) ?? "");
+        setWifePayRates(Object.fromEntries(
+          Object.entries(data.settings.wife_pay_rates).map(([days, amount]) => [days, amount.toString()]),
+        ));
+        setSelectedFederalHolidays(data.settings.federal_holidays);
+        setProjectionDaysOff(data.settings.days_off.map((date) => date.slice(0, 10)));
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Could not load income projections");
+      })
+      .finally(() => {
+        if (!cancelled) setProjectionLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activePage, profile?.id, projectionRefreshKey]);
 
   const latestOverviewMonth = monthKey(new Date());
   const overviewMonthOptions = useMemo(() => {
@@ -480,8 +551,11 @@ export default function App() {
 
   const pageTitle = activePage === "administration"
     ? "Administration"
-    : activePage === "transactions" ? "Transactions" : "Overview";
-  const pageEyebrow = activePage === "administration" ? "ADMINISTRATION" : "YOUR FINANCES";
+    : activePage === "transactions" ? "Transactions"
+      : activePage === "projections" ? "Projections" : "Overview";
+  const pageEyebrow = activePage === "administration"
+    ? "ADMINISTRATION"
+    : activePage === "projections" ? "INCOME FORECAST" : "YOUR FINANCES";
   const currentSpendMonth = getCurrentSpendMonth();
   const currentPeriodLabel = statisticsPeriod === "spend"
     ? selectedOverviewMonth === currentSpendMonth ? "THIS CYCLE" : "SPEND CYCLE"
@@ -641,25 +715,56 @@ export default function App() {
     }
   }
 
-  async function saveProjectedIncome(event: React.FormEvent<HTMLFormElement>) {
+  async function saveProjectionSettings(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
     setNotice("");
-    const amount = Number(projectedIncomeInput);
-    if (!Number.isFinite(amount) || amount < 0) {
-      setError("Projected expendable income must be zero or greater.");
+    const payAmount = Number(projectionPayAmount);
+    const [anchorYear, anchorMonth, anchorDay] = projectionPaydayAnchor.split("-").map(Number);
+    const anchorDate = new Date(anchorYear, anchorMonth - 1, anchorDay);
+    if (!projectionPaydayAnchor || !Number.isFinite(payAmount) || payAmount < 0 || anchorDate.getDay() !== 4) {
+      setError("Enter your net pay amount and a Thursday payday anchor.");
       return;
     }
+    const parsedRates: Record<string, number> = {};
+    for (const [days, value] of Object.entries(wifePayRates)) {
+      if (!value.trim()) continue;
+      const amount = Number(value);
+      if (!Number.isFinite(amount) || amount < 0) {
+        setError(`Enter a valid non-negative net pay amount for ${days} workdays.`);
+        return;
+      }
+      parsedRates[days] = amount;
+    }
+    for (let days = 8; days <= 12; days += 1) {
+      if (parsedRates[String(days)] === undefined) {
+        setError(`Enter your wife's net pay amount for ${days} workdays.`);
+        return;
+      }
+    }
     try {
-      await api("/api/admin/finance-settings/projected-income", {
+      await api("/api/admin/projections/settings", {
         method: "PUT",
-        body: JSON.stringify({ amount }),
+        body: JSON.stringify({
+          biweekly_pay_amount: payAmount,
+          biweekly_payday_anchor: projectionPaydayAnchor,
+          wife_pay_rates: parsedRates,
+          federal_holidays: selectedFederalHolidays,
+          days_off: projectionDaysOff,
+        }),
       });
-      setNotice("Projected expendable income saved for the current spend month.");
+      setNotice("Projection assumptions saved.");
+      setProjectionRefreshKey((current) => current + 1);
       setMetricsRefreshKey((current) => current + 1);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save projected expendable income");
+      setError(err instanceof Error ? err.message : "Could not save projection assumptions");
     }
+  }
+
+  function addProjectionDayOff() {
+    if (!newProjectionDayOff || projectionDaysOff.includes(newProjectionDayOff)) return;
+    setProjectionDaysOff((current) => [...current, newProjectionDayOff].sort());
+    setNewProjectionDayOff("");
   }
 
   async function saveManualStatement(event: React.FormEvent<HTMLFormElement>) {
@@ -902,6 +1007,12 @@ export default function App() {
       setTransactions([]);
       setTransactionCategories([]);
       setFinanceSettings(null);
+      setProjectionData(null);
+      setProjectionPayAmount("");
+      setProjectionPaydayAnchor("");
+      setWifePayRates({});
+      setSelectedFederalHolidays([]);
+      setProjectionDaysOff([]);
       setDashboardMetrics({
         current_expendable_balance: null,
         current_total_credit_balance: 0,
@@ -912,6 +1023,144 @@ export default function App() {
       setError(err instanceof Error ? err.message : "Could not sign out");
     }
   }
+
+  const projectionsPanel = (
+    <>
+      {profile?.role === "admin" && (
+        <section className="panel projection-settings-panel">
+          <div className="panel-heading">
+            <div><h2>Projection assumptions</h2><p>Enter take-home pay and schedule details to calculate income for the current spend cycle and the next 12 cycles.</p></div>
+          </div>
+          {projectionLoading && !projectionData ? (
+            <div className="empty-state compact">Loading projection settings…</div>
+          ) : (
+            <form className="projection-settings-form" onSubmit={saveProjectionSettings}>
+              <div className="projection-pay-inputs">
+                <label>Your fixed net biweekly pay
+                  <input type="number" min="0" step="0.01" value={projectionPayAmount} onChange={(event) => setProjectionPayAmount(event.target.value)} required />
+                </label>
+                <label>A known Thursday payday to anchor the 14-day schedule
+                  <input type="date" value={projectionPaydayAnchor} onChange={(event) => setProjectionPaydayAnchor(event.target.value)} required />
+                </label>
+              </div>
+              <p className="projection-help">Your deposit is projected every 14 days from this date, including federal holidays.</p>
+
+              <fieldset className="projection-holidays">
+                <legend>Federal holidays your wife does not work</legend>
+                <div className="projection-holiday-grid">
+                  {(projectionData?.federal_holiday_options ?? []).map((holiday) => (
+                    <label className="preference-option" key={holiday.id}>
+                      <input
+                        type="checkbox"
+                        checked={selectedFederalHolidays.includes(holiday.id)}
+                        onChange={(event) => setSelectedFederalHolidays((current) => (
+                          event.target.checked
+                            ? [...current, holiday.id]
+                            : current.filter((item) => item !== holiday.id)
+                        ))}
+                      />
+                      {holiday.label}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              <p className="projection-help">Holiday selections recur annually; observed weekday dates are excluded when a holiday falls on a weekend. Planned time off is entered as specific dates.</p>
+
+              <div className="projection-rates">
+                <div className="projection-section-heading">
+                  <h3>Wife’s net pay by workdays in a 15-day period</h3>
+                  <span>One shared amount table is used for both half-month periods.</span>
+                </div>
+                <div className="projection-rate-grid">
+                  {Array.from({ length: 13 }, (_, workdays) => (
+                    <label key={workdays}>
+                      {workdays} workdays{workdays >= 8 && workdays <= 12 ? " *" : ""}
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={wifePayRates[String(workdays)] ?? ""}
+                        onChange={(event) => setWifePayRates((current) => ({ ...current, [workdays]: event.target.value }))}
+                        required={workdays >= 8 && workdays <= 12}
+                      />
+                    </label>
+                  ))}
+                </div>
+                <p className="projection-help">Amounts for 8–12 workdays are required. If planned time off reduces a period below 8 workdays, add that count’s net pay amount here for a complete projection.</p>
+              </div>
+
+              <div className="projection-days-off">
+                <div className="projection-section-heading">
+                  <h3>Planned days off</h3>
+                  <span>Specific dates are applied to any projected work period they fall in.</span>
+                </div>
+                <div className="projection-day-off-entry">
+                  <label>Add a date off<input type="date" value={newProjectionDayOff} onChange={(event) => setNewProjectionDayOff(event.target.value)} /></label>
+                  <button className="secondary-button" type="button" onClick={addProjectionDayOff} disabled={!newProjectionDayOff || projectionDaysOff.includes(newProjectionDayOff)}>Add day off</button>
+                </div>
+                {projectionDaysOff.length > 0 ? (
+                  <ul className="projection-day-off-list">
+                    {projectionDaysOff.map((date) => (
+                      <li key={date}>
+                        <span>{displayDate(date)}</span>
+                        <button className="secondary-button" type="button" onClick={() => setProjectionDaysOff((current) => current.filter((item) => item !== date))}>Remove</button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : <p className="projection-help">No planned days off entered.</p>}
+              </div>
+              <div className="projection-save-row">
+                <button className="primary-button" type="submit">Save projection assumptions</button>
+              </div>
+            </form>
+          )}
+        </section>
+      )}
+
+      <section className="panel projections-panel">
+        <div className="panel-heading">
+          <div><h2>Projected expendable income</h2><p>Automatic take-home pay forecast by spend cycle (4th–3rd), including the current cycle and the next 12.</p></div>
+        </div>
+        {projectionLoading && !projectionData ? (
+          <div className="empty-state">Calculating projections…</div>
+        ) : !projectionData ? (
+          <div className="empty-state">Income projections could not be loaded.</div>
+        ) : (
+          <div className="projection-period-list">
+            {projectionData.periods.map((period) => (
+              <article className="projection-period" key={period.spend_month_start}>
+                <div className="projection-period-heading">
+                  <div><h3>{displayDate(period.spend_month_start)} – {displayDate(period.spend_month_end)}</h3><span>Spend cycle</span></div>
+                  <strong className={period.projected_expendable_income === null ? "projection-incomplete" : ""}>
+                    {period.projected_expendable_income === null ? "Incomplete" : money(period.projected_expendable_income)}
+                  </strong>
+                </div>
+                <div className="projection-breakdown">
+                  <div><span>Your biweekly pay</span><strong>{money(period.your_pay_total)}</strong></div>
+                  <div><span>Wife’s pay</span><strong>{money(period.wife_pay_total)}</strong></div>
+                </div>
+                {period.your_pay_total === null && <p className="projection-warning">Enter your net pay and a payday anchor to calculate your portion.</p>}
+                {period.missing_workday_counts.length > 0 && (
+                  <p className="projection-warning">Missing wife’s pay rate{period.missing_workday_counts.length === 1 ? "" : "s"} for {period.missing_workday_counts.join(", ")} workday{period.missing_workday_counts.length === 1 ? "" : "s"}.</p>
+                )}
+                {period.wife_pay_periods.length > 0 && (
+                  <details className="projection-pay-details">
+                    <summary>Wife’s deposits and workday counts</summary>
+                    {period.wife_pay_periods.map((payPeriod) => (
+                      <div className="projection-pay-period" key={`${payPeriod.pay_date}-${payPeriod.work_period_start}`}>
+                        <span>Paid {displayDate(payPeriod.pay_date)} · worked {displayDate(payPeriod.work_period_start)}–{displayDate(payPeriod.work_period_end)} ({payPeriod.workdays} days)</span>
+                        <strong>{money(payPeriod.amount)}</strong>
+                      </div>
+                    ))}
+                  </details>
+                )}
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+    </>
+  );
 
   const passwordPanel = (
     <details className="panel password-panel">
@@ -972,6 +1221,11 @@ export default function App() {
             onClick={() => navigateToPage("overview")}
             aria-current={activePage === "overview" ? "page" : undefined}
           ><Banknote size={18} /> Overview</button>
+          <button
+            className={`nav-item ${activePage === "projections" ? "active" : ""}`}
+            onClick={() => navigateToPage("projections")}
+            aria-current={activePage === "projections" ? "page" : undefined}
+          ><ArrowUpRight size={18} /> Projections</button>
           <button
             className={`nav-item ${activePage === "transactions" ? "active" : ""}`}
             onClick={() => navigateToPage("transactions")}
@@ -1127,7 +1381,7 @@ export default function App() {
                 <>
                   <section className="panel settings-panel">
                     <div className="panel-heading">
-                      <div><h2>Overview balances and projection</h2><p>Configure the account and projected income shown on every profile’s Overview.</p></div>
+                      <div><h2>Overview balance settings</h2><p>Choose the cash account shown as the current expendable balance on every profile’s Overview.</p></div>
                     </div>
                     {financeSettingsLoading || !financeSettings ? (
                       <div className="empty-state compact">{financeSettingsLoading ? "Loading finance settings…" : "Finance settings are unavailable."}</div>
@@ -1146,13 +1400,6 @@ export default function App() {
                           </label>
                           <button className="secondary-button" type="submit">Save account</button>
                         </form>
-                        <form className="profile-form finance-form" onSubmit={saveProjectedIncome}>
-                          <label>Projected Expendable income · spend month starting {new Date(`${financeSettings.current_spend_month_start.slice(0, 10)}T00:00:00`).toLocaleDateString()}
-                            <input type="number" min="0" step="0.01" value={projectedIncomeInput} onChange={(event) => setProjectedIncomeInput(event.target.value)} required />
-                          </label>
-                          <button className="secondary-button" type="submit">Save projection</button>
-                        </form>
-                        <p className="finance-help">A projection can be changed during its spend month and is frozen in the database after the cycle ends on the 3rd.</p>
                       </>
                     )}
                   </section>
@@ -1235,6 +1482,8 @@ export default function App() {
             )}
             {transactionsPanel}
           </>
+        ) : activePage === "projections" ? (
+          projectionsPanel
         ) : (
           <>
             {accounts.some((account) => account.demo_data) && (

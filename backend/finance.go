@@ -68,14 +68,12 @@ func (a *app) getDashboardMetrics(w http.ResponseWriter, r *http.Request) {
 					) selected_statements
 				), 0)
 			ELSE NULL END,
-			(SELECT amount FROM projected_expendable_income WHERE period_start = $3),
 			EXISTS (SELECT 1 FROM credit_card_statements)`,
-		start, end, periodStart,
+		start, end,
 	).Scan(
 		&result.CurrentExpendableBalance,
 		&result.CurrentTotalCreditBalance,
 		&result.StatementBalanceDue,
-		&result.ProjectedExpendableIncome,
 		&hasStatementData,
 	)
 	if err != nil {
@@ -85,6 +83,18 @@ func (a *app) getDashboardMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	if !hasStatementData {
 		result.StatementBalanceDue = nil
+	}
+	var today time.Time
+	if err := a.db.QueryRow(r.Context(), "SELECT CURRENT_DATE").Scan(&today); err != nil {
+		log.Printf("read current date for dashboard projection: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load dashboard finance metrics")
+		return
+	}
+	result.ProjectedExpendableIncome, err = a.projectedIncomeForPeriod(r.Context(), periodStart, dateOnly(today))
+	if err != nil {
+		log.Printf("calculate dashboard projected income: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load dashboard finance metrics")
+		return
 	}
 	writeJSON(w, http.StatusOK, result)
 }
@@ -97,27 +107,14 @@ func (a *app) getFinanceSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var response struct {
-		ExpendableCashAccountID   *string               `json:"expendable_cash_account_id"`
-		CurrentSpendMonthStart    time.Time             `json:"current_spend_month_start"`
-		ProjectedExpendableIncome *float64              `json:"projected_expendable_income"`
-		ManualStatements          []creditCardStatement `json:"manual_statements"`
-		PlaidStatements           []creditCardStatement `json:"plaid_statements"`
+		ExpendableCashAccountID *string               `json:"expendable_cash_account_id"`
+		ManualStatements        []creditCardStatement `json:"manual_statements"`
+		PlaidStatements         []creditCardStatement `json:"plaid_statements"`
 	}
 	err := a.db.QueryRow(r.Context(), `
-		SELECT settings.expendable_cash_account_id,
-			CASE WHEN EXTRACT(DAY FROM CURRENT_DATE) >= 4
-				THEN date_trunc('month', CURRENT_DATE)::date + 3
-				ELSE (date_trunc('month', CURRENT_DATE) - INTERVAL '1 month')::date + 3
-			END,
-			projection.amount
-		FROM finance_settings settings
-		LEFT JOIN projected_expendable_income projection
-		  ON projection.period_start = CASE WHEN EXTRACT(DAY FROM CURRENT_DATE) >= 4
-			THEN date_trunc('month', CURRENT_DATE)::date + 3
-			ELSE (date_trunc('month', CURRENT_DATE) - INTERVAL '1 month')::date + 3
-		  END
-		WHERE settings.setting_id = 1`,
-	).Scan(&response.ExpendableCashAccountID, &response.CurrentSpendMonthStart, &response.ProjectedExpendableIncome)
+		SELECT expendable_cash_account_id
+		FROM finance_settings WHERE setting_id = 1`,
+	).Scan(&response.ExpendableCashAccountID)
 	if err != nil {
 		log.Printf("read financial management settings: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not load financial management settings")
@@ -202,53 +199,6 @@ func (a *app) setExpendableCashAccount(w http.ResponseWriter, r *http.Request) {
 		WHERE setting_id = 1`, input.AccountID); err != nil {
 		log.Printf("save expendable cash account: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not save expendable cash account")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]bool{"saved": true})
-}
-
-func (a *app) setProjectedExpendableIncome(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		Amount *float64 `json:"amount"`
-	}
-	if err := decodeJSON(r, &input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON request")
-		return
-	}
-	if input.Amount == nil || *input.Amount < 0 {
-		writeError(w, http.StatusBadRequest, "projected income must be zero or greater")
-		return
-	}
-	if err := a.freezeExpiredProjectedIncome(r.Context()); err != nil {
-		log.Printf("freeze expired projected income: %v", err)
-		writeError(w, http.StatusInternalServerError, "could not save projected income")
-		return
-	}
-	var periodStart time.Time
-	err := a.db.QueryRow(r.Context(), `
-		SELECT CASE WHEN EXTRACT(DAY FROM CURRENT_DATE) >= 4
-			THEN date_trunc('month', CURRENT_DATE)::date + 3
-			ELSE (date_trunc('month', CURRENT_DATE) - INTERVAL '1 month')::date + 3
-		END`,
-	).Scan(&periodStart)
-	if err != nil {
-		log.Printf("read current spend month for projected income: %v", err)
-		writeError(w, http.StatusInternalServerError, "could not save projected income")
-		return
-	}
-	result, err := a.db.Exec(r.Context(), `
-		INSERT INTO projected_expendable_income (period_start, amount)
-		VALUES ($1, $2)
-		ON CONFLICT (period_start) DO UPDATE SET amount = EXCLUDED.amount, updated_at = NOW()
-		WHERE projected_expendable_income.frozen_at IS NULL`,
-		periodStart, *input.Amount)
-	if err != nil {
-		log.Printf("save projected expendable income: %v", err)
-		writeError(w, http.StatusInternalServerError, "could not save projected income")
-		return
-	}
-	if result.RowsAffected() == 0 {
-		writeError(w, http.StatusConflict, "projected income for this spend month is frozen")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"saved": true})

@@ -58,6 +58,30 @@ CREATE TABLE IF NOT EXISTS projected_expendable_income (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS income_projection_settings (
+    setting_id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (setting_id = 1),
+    biweekly_pay_amount NUMERIC(18, 4) CHECK (biweekly_pay_amount >= 0),
+    biweekly_payday_anchor DATE,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO income_projection_settings (setting_id)
+VALUES (1)
+ON CONFLICT (setting_id) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS projection_wife_pay_rates (
+    workday_count SMALLINT PRIMARY KEY CHECK (workday_count BETWEEN 0 AND 12),
+    net_pay NUMERIC(18, 4) NOT NULL CHECK (net_pay >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS projection_federal_holidays (
+    holiday_id TEXT PRIMARY KEY
+);
+
+CREATE TABLE IF NOT EXISTS projection_days_off (
+    day_off DATE PRIMARY KEY
+);
+
 CREATE TABLE IF NOT EXISTS credit_card_statements (
     account_id TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
     due_date DATE NOT NULL,

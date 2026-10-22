@@ -12,8 +12,9 @@ A self-hosted personal finance app scaffold using Go, React, PostgreSQL, and Pla
 - Dashboard income, spending, and net statistics default to the spend calendar from the 4th through the 3rd; switch to calendar month from Dashboard preferences.
 - The Overview heading opens a calendar-month selector; its history begins one year before first use in the browser and grows as new months arrive.
 - The dashboard's cash balance card totals depository accounts only.
-- Overview adds the administrator-selected expendable cash balance, total current credit balance, statement balances due in the selected statistics period, and projected expendable income for the selected spend month.
-- Administrators can configure the expendable cash account and current-cycle projection, which is frozen after the spend cycle ends on the 3rd. Financial Management displays retrieved Plaid statement balances by account and due date; balances can also be entered manually when an institution or existing Plaid connection does not provide them.
+- Overview adds the administrator-selected expendable cash balance, total current credit balance, statement balances due in the selected statistics period, and automatically calculated projected expendable income.
+- The Projections workspace forecasts the current spend cycle and the next 12 cycles from a fixed biweekly net paycheck, a twice-monthly net pay table, selected recurring federal holidays, and planned days off. The forecast period runs from the 4th through the 3rd, and each completed cycle's calculated amount is frozen.
+- Administrators can configure the expendable cash account and pay assumptions. Financial Management displays retrieved Plaid statement balances by account and due date; balances can also be entered manually when an institution or existing Plaid connection does not provide them.
 - Each profile can hide and reorder all eight Overview summary cards from the Filter drawer.
 - Dashboard filters and summary-card preferences open in a slide-in drawer from the right.
 - Assigning a category creates a reusable rule that updates similar existing transactions and applies to future syncs. Expense rules match the normalized first three merchant/description words; income rules match the normalized first three transaction-name words on the same account.

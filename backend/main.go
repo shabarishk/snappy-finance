@@ -84,9 +84,10 @@ func main() {
 	mux.Handle("GET /api/me/preferences", a.requireAuth(http.HandlerFunc(a.getPreferences)))
 	mux.Handle("PUT /api/me/preferences", a.requireAuth(http.HandlerFunc(a.updatePreferences)))
 	mux.Handle("GET /api/dashboard/metrics", a.requireAuth(http.HandlerFunc(a.getDashboardMetrics)))
+	mux.Handle("GET /api/projections", a.requireAuth(http.HandlerFunc(a.getProjections)))
+	mux.Handle("PUT /api/admin/projections/settings", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.saveProjectionSettings))))
 	mux.Handle("GET /api/admin/finance-settings", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.getFinanceSettings))))
 	mux.Handle("PUT /api/admin/finance-settings/expendable-account", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.setExpendableCashAccount))))
-	mux.Handle("PUT /api/admin/finance-settings/projected-income", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.setProjectedExpendableIncome))))
 	mux.Handle("PUT /api/admin/finance-settings/credit-card-statement", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.saveCreditCardStatement))))
 	mux.Handle("DELETE /api/admin/finance-settings/credit-card-statement", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.deleteCreditCardStatement))))
 	mux.Handle("POST /api/me/password", a.requireAuth(http.HandlerFunc(a.changePassword)))
@@ -714,8 +715,8 @@ func (a *app) persistTransactionPage(ctx context.Context, itemID string, result 
 }
 
 func (a *app) runSyncWorker(ctx context.Context) {
-	if err := a.freezeExpiredProjectedIncome(ctx); err != nil {
-		log.Printf("freeze expired projected income at startup: %v", err)
+	if _, _, err := a.refreshOpenIncomeProjections(ctx); err != nil {
+		log.Printf("refresh income projections at startup: %v", err)
 	}
 	if err := a.syncAll(ctx); err != nil {
 		log.Printf("startup Plaid sync: %v", err)
@@ -727,8 +728,8 @@ func (a *app) runSyncWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := a.freezeExpiredProjectedIncome(ctx); err != nil {
-				log.Printf("freeze expired projected income: %v", err)
+			if _, _, err := a.refreshOpenIncomeProjections(ctx); err != nil {
+				log.Printf("refresh scheduled income projections: %v", err)
 			}
 			if err := a.syncAll(ctx); err != nil {
 				log.Printf("scheduled Plaid sync: %v", err)
