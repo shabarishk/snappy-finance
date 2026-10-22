@@ -110,6 +110,8 @@ button { cursor: pointer; }
 .preference-option input { accent-color: var(--green); }
 .preference-list-heading { color: #52615a; font-size: 11px; }
 .dashboard-preferences-drawer .preference-list { align-items: flex-start; flex-direction: column; gap: 7px; }
+.liquidity-category-preferences { border-top: 1px solid var(--line); }
+.liquidity-category-preferences > p { color: var(--muted); font-size: 10px; line-height: 1.5; margin: 0 0 5px; }
 .card-order-list { border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 7px; padding: 15px 21px; }
 .card-order-row { align-items: center; color: #52615a; display: flex; font-size: 11px; justify-content: space-between; min-height: 34px; }
 .card-order-row > div { display: flex; gap: 5px; }

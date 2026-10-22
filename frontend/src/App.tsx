@@ -28,6 +28,7 @@ function normalizeDashboardCardOrder(order: string[] | undefined) {
 type DashboardPreferences = {
   hidden_cards: string[];
   card_order: string[];
+  excluded_spend_categories: string[];
 };
 
 type DashboardMetrics = {
@@ -369,6 +370,7 @@ export default function App() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [hiddenCards, setHiddenCards] = useState<string[]>([]);
+  const [excludedSpendCategories, setExcludedSpendCategories] = useState<string[]>([]);
   const [cardOrder, setCardOrder] = useState(defaultDashboardCardOrder);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [newUsername, setNewUsername] = useState("");
@@ -520,6 +522,7 @@ export default function App() {
           const preferences = await api<DashboardPreferences>("/api/me/preferences");
           setHiddenCards(preferences.hidden_cards);
           setCardOrder(normalizeDashboardCardOrder(preferences.card_order));
+          setExcludedSpendCategories(preferences.excluded_spend_categories ?? []);
           if (user.role === "admin") {
             setProfiles(await api<Profile[]>("/api/admin/users"));
           }
@@ -574,7 +577,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [metricsRefreshKey, profile]);
+  }, [excludedSpendCategories, metricsRefreshKey, profile]);
 
   useEffect(() => {
     if (profile?.role !== "admin" || activePage !== "administration" || adminSection !== "finance") return;
@@ -757,6 +760,7 @@ export default function App() {
       const preferences = await api<DashboardPreferences>("/api/me/preferences");
       setHiddenCards(preferences.hidden_cards);
       setCardOrder(normalizeDashboardCardOrder(preferences.card_order));
+      setExcludedSpendCategories(preferences.excluded_spend_categories ?? []);
       if (result.user.role === "admin") {
         setProfiles(await api<Profile[]>("/api/admin/users"));
       }
@@ -773,12 +777,32 @@ export default function App() {
     try {
       const result = await api<DashboardPreferences>("/api/me/preferences", {
         method: "PUT",
-        body: JSON.stringify({ hidden_cards: nextHidden, card_order: cardOrder }),
+        body: JSON.stringify({ hidden_cards: nextHidden, card_order: cardOrder, excluded_spend_categories: excludedSpendCategories }),
       });
       setHiddenCards(result.hidden_cards);
       setCardOrder(normalizeDashboardCardOrder(result.card_order));
+      setExcludedSpendCategories(result.excluded_spend_categories ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save dashboard preferences");
+    }
+  }
+
+  async function saveLiquidityCategory(categoryID: string, excluded: boolean) {
+    const nextExcluded = excluded
+      ? [...excludedSpendCategories, categoryID]
+      : excludedSpendCategories.filter((id) => id !== categoryID);
+    try {
+      const result = await api<DashboardPreferences>("/api/me/preferences", {
+        method: "PUT",
+        body: JSON.stringify({
+          hidden_cards: hiddenCards,
+          card_order: cardOrder,
+          excluded_spend_categories: nextExcluded,
+        }),
+      });
+      setExcludedSpendCategories(result.excluded_spend_categories ?? []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save liquidity category preferences");
     }
   }
 
@@ -791,10 +815,11 @@ export default function App() {
     try {
       const result = await api<DashboardPreferences>("/api/me/preferences", {
         method: "PUT",
-        body: JSON.stringify({ hidden_cards: hiddenCards, card_order: nextOrder }),
+        body: JSON.stringify({ hidden_cards: hiddenCards, card_order: nextOrder, excluded_spend_categories: excludedSpendCategories }),
       });
       setHiddenCards(result.hidden_cards);
       setCardOrder(normalizeDashboardCardOrder(result.card_order));
+      setExcludedSpendCategories(result.excluded_spend_categories ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save dashboard card order");
     }
@@ -2017,6 +2042,20 @@ export default function App() {
                       </div>
                     );
                   })}
+                </div>
+                <div className="preference-list liquidity-category-preferences">
+                  <strong className="preference-list-heading">Include spending categories in liquidity charts</strong>
+                  <p>These choices affect your liquidity charts and forecasts only. Categories excluded by the administrator remain excluded for everyone.</p>
+                  {transactionCategories.filter((category) => category.category_type === "expense").map((category) => (
+                    <label className="preference-option" key={category.category_id}>
+                      <input
+                        type="checkbox"
+                        checked={!excludedSpendCategories.includes(category.category_id)}
+                        onChange={(event) => void saveLiquidityCategory(category.category_id, !event.target.checked)}
+                      />
+                      {category.label}
+                    </label>
+                  ))}
                 </div>
                 <div className="statistics-period-control">
                   <div className="statistics-period-copy">

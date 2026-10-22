@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"sort"
@@ -90,6 +91,20 @@ func (a *app) getDashboardLiquidity(w http.ResponseWriter, r *http.Request) {
 	}
 
 	isAdmin := currentPrincipal(r).Role == "admin"
+	var encodedPreferences []byte
+	if err := a.db.QueryRow(r.Context(),
+		"SELECT dashboard_preferences FROM users WHERE id = $1", currentPrincipal(r).ID,
+	).Scan(&encodedPreferences); err != nil {
+		log.Printf("read dashboard liquidity preferences: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load dashboard liquidity")
+		return
+	}
+	var preferences dashboardPreferences
+	if err := json.Unmarshal(encodedPreferences, &preferences); err != nil {
+		log.Printf("decode dashboard liquidity preferences: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load dashboard liquidity")
+		return
+	}
 	rows, err = a.db.Query(r.Context(), `
 		SELECT txn.transaction_date::text, txn.amount, account.type,
 			cycle.statement_close_day, cycle.statement_due_day,
@@ -101,8 +116,9 @@ func (a *app) getDashboardLiquidity(w http.ResponseWriter, r *http.Request) {
 		WHERE txn.amount > 0
 		  AND account.type IN ('depository', 'credit')
 		  AND ($1 OR NOT txn.hidden_from_users)
+		  AND NOT COALESCE(txn.category_id = ANY($2::text[]), FALSE)
 		  AND NOT COALESCE(category.category_type = 'expense' AND category.excluded_from_totals, FALSE)`,
-		isAdmin)
+		isAdmin, preferences.ExcludedSpendCategories)
 	if err != nil {
 		log.Printf("query dashboard liquidity transactions: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not load dashboard liquidity")

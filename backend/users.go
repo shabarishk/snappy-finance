@@ -15,8 +15,9 @@ import (
 )
 
 type dashboardPreferences struct {
-	HiddenCards []string `json:"hidden_cards"`
-	CardOrder   []string `json:"card_order"`
+	HiddenCards             []string `json:"hidden_cards"`
+	CardOrder               []string `json:"card_order"`
+	ExcludedSpendCategories []string `json:"excluded_spend_categories"`
 }
 
 type userSummary struct {
@@ -198,6 +199,9 @@ func (a *app) getPreferences(w http.ResponseWriter, r *http.Request) {
 	if preferences.HiddenCards == nil {
 		preferences.HiddenCards = []string{}
 	}
+	if preferences.ExcludedSpendCategories == nil {
+		preferences.ExcludedSpendCategories = []string{}
+	}
 	if len(preferences.CardOrder) == 0 {
 		preferences.CardOrder = append([]string(nil), defaultDashboardCardOrder...)
 	}
@@ -209,6 +213,55 @@ func (a *app) updatePreferences(w http.ResponseWriter, r *http.Request) {
 	if err := decodeJSON(r, &preferences); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON request")
 		return
+	}
+	user := currentPrincipal(r)
+	if preferences.ExcludedSpendCategories == nil {
+		var encoded []byte
+		if err := a.db.QueryRow(r.Context(), "SELECT dashboard_preferences FROM users WHERE id = $1", user.ID).Scan(&encoded); err != nil {
+			log.Printf("read existing dashboard preferences: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not save dashboard preferences")
+			return
+		}
+		var existing dashboardPreferences
+		if err := json.Unmarshal(encoded, &existing); err != nil {
+			log.Printf("decode existing dashboard preferences: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not save dashboard preferences")
+			return
+		}
+		preferences.ExcludedSpendCategories = existing.ExcludedSpendCategories
+	}
+	preferences.ExcludedSpendCategories = uniqueStrings(preferences.ExcludedSpendCategories)
+	validCategories := make(map[string]struct{}, len(preferences.ExcludedSpendCategories))
+	if len(preferences.ExcludedSpendCategories) > 0 {
+		rows, err := a.db.Query(r.Context(), `
+			SELECT category_id FROM transaction_categories
+			WHERE category_type = 'expense' AND category_id = ANY($1::text[])`,
+			preferences.ExcludedSpendCategories)
+		if err != nil {
+			log.Printf("validate excluded spending categories: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not save dashboard preferences")
+			return
+		}
+		for rows.Next() {
+			var categoryID string
+			if err := rows.Scan(&categoryID); err != nil {
+				rows.Close()
+				log.Printf("scan valid spending category: %v", err)
+				writeError(w, http.StatusInternalServerError, "could not save dashboard preferences")
+				return
+			}
+			validCategories[categoryID] = struct{}{}
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			log.Printf("read valid spending categories: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not save dashboard preferences")
+			return
+		}
+		if len(validCategories) != len(preferences.ExcludedSpendCategories) {
+			writeError(w, http.StatusBadRequest, "unknown or non-expense spending category")
+			return
+		}
 	}
 	hidden := make([]string, 0, len(preferences.HiddenCards))
 	seen := make(map[string]struct{}, len(preferences.HiddenCards))
@@ -255,7 +308,6 @@ func (a *app) updatePreferences(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not save dashboard preferences")
 		return
 	}
-	user := currentPrincipal(r)
 	if _, err := a.db.Exec(r.Context(), `
 		UPDATE users SET dashboard_preferences = $2::jsonb WHERE id = $1`,
 		user.ID, string(encoded)); err != nil {
@@ -264,6 +316,19 @@ func (a *app) updatePreferences(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, preferences)
+}
+
+func uniqueStrings(values []string) []string {
+	unique := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		unique = append(unique, value)
+	}
+	return unique
 }
 
 func (a *app) changePassword(w http.ResponseWriter, r *http.Request) {
