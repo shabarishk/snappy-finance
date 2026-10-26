@@ -109,7 +109,7 @@ type SubscriptionTrackerPayment = {
 };
 
 type SubscriptionTrackerData = {
-  payments: SubscriptionTrackerPayment[];
+  months: { spend_month: string; payments: SubscriptionTrackerPayment[] }[];
   payment_history: { name: string; merchant_name: string; account_name: string; due_date: string; payment_date: string; amount: number }[];
   amount_history: { name: string; amount: number; effective_date: string; change_type: string }[];
 };
@@ -471,7 +471,7 @@ export default function App() {
   const [liquidityLoading, setLiquidityLoading] = useState(false);
   const [subscriptionTracker, setSubscriptionTracker] = useState<SubscriptionTrackerData | null>(null);
   const [subscriptionTrackerLoading, setSubscriptionTrackerLoading] = useState(false);
-  const [selectedLiquidityMonthIndex, setSelectedLiquidityMonthIndex] = useState(1);
+  const [selectedLiquidityMonthIndex, setSelectedLiquidityMonthIndex] = useState(0);
   const [dashboardMetrics, setDashboardMetrics] = useState<DashboardMetrics>({
     current_expendable_balance: null,
     current_total_credit_balance: 0,
@@ -675,7 +675,8 @@ export default function App() {
     if (!profile || activePage !== "overview") return;
     let cancelled = false;
     setSubscriptionTrackerLoading(true);
-    api<SubscriptionTrackerData>("/api/dashboard/subscription-tracker")
+    const params = new URLSearchParams({ spend_month: getCurrentSpendMonth() });
+    api<SubscriptionTrackerData>(`/api/dashboard/subscription-tracker?${params.toString()}`)
       .then((data) => {
         if (!cancelled) setSubscriptionTracker(data);
       })
@@ -2546,7 +2547,7 @@ export default function App() {
 
         <section className="panel subscription-tracker-panel">
           <div className="panel-heading">
-            <div><h2>Subscription &amp; bill payments</h2><p>Scheduled payments matched by merchant and account. Variable bills are tracked without requiring the same amount each month.</p></div>
+            <div><h2>Subscription &amp; bill payments</h2><p>Scheduled payments matched by merchant and account across the current spend month and the next two, in sync with the pie chart. Variable bills are tracked without requiring the same amount each month.</p></div>
             {profile?.role === "admin" && (
               <button type="button" className="secondary-button" onClick={() => navigateToPage("projections")}>Manage schedules</button>
             )}
@@ -2555,42 +2556,66 @@ export default function App() {
             <div className="empty-state">Loading scheduled payments…</div>
           ) : !subscriptionTracker ? (
             <div className="empty-state">Subscription tracking is unavailable.</div>
-          ) : subscriptionTracker.payments.length === 0 ? (
-            <div className="empty-state compact">No scheduled payments are due this month or next month.</div>
           ) : (
-            <div className="subscription-tracker-list">
-              {subscriptionTracker.payments.slice().sort((left, right) => left.due_date.localeCompare(right.due_date)).map((payment, index) => {
-                const requiresSetup = !payment.account_name || !payment.merchant_name;
-                const isOverdue = !payment.paid && payment.due_date < transactionDateKey(new Date());
+            <div>
+              <div className="subscription-month-tabs" role="tablist" aria-label="Subscription spend months">
+                {subscriptionTracker.months.map((month, monthIndex) => {
+                  const [year, monthNumber] = month.spend_month.split("-").map(Number);
+                  const label = new Date(year, monthNumber - 1, 4).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+                  return (
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={selectedLiquidityMonthIndex === monthIndex}
+                      className={selectedLiquidityMonthIndex === monthIndex ? "active" : ""}
+                      key={month.spend_month}
+                      onClick={() => setSelectedLiquidityMonthIndex(monthIndex)}
+                    >{label}</button>
+                  );
+                })}
+              </div>
+              {(() => {
+                const month = subscriptionTracker.months[Math.min(selectedLiquidityMonthIndex, subscriptionTracker.months.length - 1)];
+                if (!month || month.payments.length === 0) {
+                  return <div className="empty-state compact">No scheduled payments are due in this spend month.</div>;
+                }
                 return (
-                  <article className={`subscription-payment-row ${payment.pending_review_id ? "subscription-payment-review" : ""}`} key={`${payment.expense_id}-${payment.due_date}-${index}`}>
-                    <div className="subscription-payment-date">{displayDate(payment.due_date, { month: "short", day: "numeric" })}</div>
-                    <div className="subscription-payment-info">
-                      <strong>{payment.name}</strong>
-                      <span>{payment.merchant_name || "Merchant not set"}{payment.account_name ? ` · ${payment.account_name}` : " · Account not set"}</span>
-                      <small>{payment.tracking_mode === "variable" ? "Variable bill" : "Fixed subscription"}</small>
-                    </div>
-                    <div className="subscription-payment-amount">
-                      <strong>{money(payment.actual_amount ?? payment.amount)}</strong>
-                      {payment.paid && payment.actual_amount !== null && payment.actual_amount !== payment.amount && (
-                        <span>Scheduled {money(payment.amount)}</span>
-                      )}
-                    </div>
-                    <div className={`subscription-payment-status ${payment.paid ? "paid" : isOverdue ? "overdue" : ""}`}>
-                      {requiresSetup ? "Needs matching details" : payment.paid ? "Paid" : isOverdue ? "Past due" : "Upcoming"}
-                    </div>
-                    {payment.pending_review_id && profile?.role === "admin" && payment.actual_amount !== null && (
-                      <div className="subscription-increase-prompt">
-                        <p>{payment.name} was charged {money(payment.actual_amount)} instead of {money(payment.amount)}. Confirm the new subscription amount?</p>
-                        <div>
-                          <button type="button" className="primary-button" onClick={() => void resolveSubscriptionIncrease(payment.pending_review_id!, true)}>Confirm increase</button>
-                          <button type="button" className="secondary-button" onClick={() => void resolveSubscriptionIncrease(payment.pending_review_id!, false)}>Not an increase</button>
-                        </div>
-                      </div>
-                    )}
-                  </article>
+                  <div className="subscription-tracker-list">
+                    {month.payments.slice().sort((left, right) => left.due_date.localeCompare(right.due_date)).map((payment, index) => {
+                      const requiresSetup = !payment.account_name || !payment.merchant_name;
+                      const isOverdue = !payment.paid && payment.due_date < transactionDateKey(new Date());
+                      return (
+                        <article className={`subscription-payment-row ${payment.pending_review_id ? "subscription-payment-review" : ""}`} key={`${payment.expense_id}-${payment.due_date}-${index}`}>
+                          <div className="subscription-payment-date">{displayDate(payment.due_date, { month: "short", day: "numeric" })}</div>
+                          <div className="subscription-payment-info">
+                            <strong>{payment.name}</strong>
+                            <span>{payment.merchant_name || "Merchant not set"}{payment.account_name ? ` · ${payment.account_name}` : " · Account not set"}</span>
+                            <small>{payment.tracking_mode === "variable" ? "Variable bill" : "Fixed subscription"}</small>
+                          </div>
+                          <div className="subscription-payment-amount">
+                            <strong>{money(payment.actual_amount ?? payment.amount)}</strong>
+                            {payment.paid && payment.actual_amount !== null && payment.actual_amount !== payment.amount && (
+                              <span>Scheduled {money(payment.amount)}</span>
+                            )}
+                          </div>
+                          <div className={`subscription-payment-status ${payment.paid ? "paid" : isOverdue ? "overdue" : ""}`}>
+                            {requiresSetup ? "Needs matching details" : payment.paid ? "Paid" : isOverdue ? "Past due" : "Upcoming"}
+                          </div>
+                          {payment.pending_review_id && profile?.role === "admin" && payment.actual_amount !== null && (
+                            <div className="subscription-increase-prompt">
+                              <p>{payment.name} was charged {money(payment.actual_amount)} instead of {money(payment.amount)}. Confirm the new subscription amount?</p>
+                              <div>
+                                <button type="button" className="primary-button" onClick={() => void resolveSubscriptionIncrease(payment.pending_review_id!, true)}>Confirm increase</button>
+                                <button type="button" className="secondary-button" onClick={() => void resolveSubscriptionIncrease(payment.pending_review_id!, false)}>Not an increase</button>
+                              </div>
+                            </div>
+                          )}
+                        </article>
+                      );
+                    })}
+                  </div>
                 );
-              })}
+              })()}
             </div>
           )}
           {(subscriptionTracker?.payment_history.length ?? 0) > 0 && (

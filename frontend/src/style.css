@@ -252,6 +252,10 @@ button { cursor: pointer; }
 .subscription-tracker-panel .panel-heading { gap: 14px; }
 .subscription-tracker-panel .panel-heading > div { min-width: 0; }
 .subscription-tracker-panel .panel-heading p { max-width: 680px; }
+.subscription-month-tabs { border-bottom: 1px solid var(--line); display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 0 22px; }
+.subscription-month-tabs button { background: none; border: 0; border-bottom: 2px solid transparent; color: #74817a; font-size: 11px; min-height: 43px; padding: 0 8px; }
+.subscription-month-tabs button.active { border-bottom-color: var(--green); color: var(--green-dark); font-weight: 600; }
+.subscription-month-tabs button:focus-visible { outline: 2px solid #78b89b; outline-offset: -3px; }
 .subscription-tracker-list { padding: 0 22px; }
 .subscription-payment-row { align-items: center; border-bottom: 1px solid #f0f2f0; column-gap: 14px; display: grid; grid-template-columns: 76px minmax(130px, 1fr) auto auto; padding: 14px 0; row-gap: 8px; }
 .subscription-payment-row:last-child { border-bottom: 0; }
@@ -404,6 +408,8 @@ footer { color: #9aa39e; font-size: 10px; padding: 6px 0 16px; }
 @media (max-width: 720px) {
   .transactions-layout { grid-template-columns: minmax(0, 1fr); }
   .transaction-tabs { border-bottom: 1px solid var(--line); border-right: 0; flex-direction: row; overflow-x: auto; padding: 8px 12px 0;     .subscription-tracker-panel .panel-heading { align-items: flex-start; flex-direction: column; }
+  .subscription-month-tabs { padding-left: 15px; padding-right: 15px; }
+  .subscription-month-tabs button { font-size: 10px; }
     .subscription-tracker-list { padding-left: 15px; padding-right: 15px; }
     .subscription-payment-row { column-gap: 9px; grid-template-columns: 55px minmax(0, 1fr) auto; }
     .subscription-payment-amount { grid-column: 3; grid-row: 1; }

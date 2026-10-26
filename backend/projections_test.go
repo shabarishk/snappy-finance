@@ -50,6 +50,26 @@ func TestSubscriptionPaymentMatchHelpers(t *testing.T) {
 	}
 }
 
+func TestSubscriptionTrackerUsesCurrentAndNextTwoSpendMonths(t *testing.T) {
+	startMonth := time.Date(2026, time.October, 26, 0, 0, 0, 0, time.UTC)
+	start, end, months := subscriptionTrackerPeriod(startMonth)
+	if got, want := start.Format("2006-01-02"), "2026-10-04"; got != want {
+		t.Errorf("tracker period start = %s, want %s", got, want)
+	}
+	if got, want := end.Format("2006-01-02"), "2027-01-03"; got != want {
+		t.Errorf("tracker period end = %s, want %s", got, want)
+	}
+	wantMonths := []string{"2026-10", "2026-11", "2026-12"}
+	if len(months) != len(wantMonths) {
+		t.Fatalf("tracker months = %v, want %v", months, wantMonths)
+	}
+	for index := range wantMonths {
+		if months[index] != wantMonths[index] {
+			t.Errorf("tracker month %d = %s, want %s", index, months[index], wantMonths[index])
+		}
+	}
+}
+
 func TestCalculateIncomeProjectionsIncludesCurrentAndNextTwelveCycles(t *testing.T) {
 	today := time.Date(2026, time.October, 21, 0, 0, 0, 0, time.UTC)
 	periods := calculateIncomeProjections(projectionSettings{}, nil, today)
