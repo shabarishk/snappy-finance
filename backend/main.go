@@ -86,6 +86,8 @@ func main() {
 	mux.Handle("GET /api/dashboard/metrics", a.requireAuth(http.HandlerFunc(a.getDashboardMetrics)))
 	mux.Handle("GET /api/dashboard/liquidity", a.requireAuth(http.HandlerFunc(a.getDashboardLiquidity)))
 	mux.Handle("GET /api/dashboard/liquidity/transactions", a.requireAuth(http.HandlerFunc(a.getDashboardLiquidityTransactions)))
+	mux.Handle("GET /api/dashboard/subscription-tracker", a.requireAuth(http.HandlerFunc(a.getSubscriptionTracker)))
+	mux.Handle("PATCH /api/admin/subscription-increases/{reviewID}", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.resolveSubscriptionIncrease))))
 	mux.Handle("GET /api/projections", a.requireAuth(http.HandlerFunc(a.getProjections)))
 	mux.Handle("PUT /api/admin/projections/settings", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.saveProjectionSettings))))
 	mux.Handle("PUT /api/admin/projections/expenses", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.saveScheduledProjectionExpenses))))

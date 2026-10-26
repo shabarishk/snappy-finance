@@ -96,6 +96,35 @@ ALTER TABLE scheduled_projection_expenses
     ADD CONSTRAINT scheduled_projection_expenses_frequency_check
     CHECK (frequency IN ('one_time', 'weekly', 'monthly', 'bimonthly', 'annual'));
 
+ALTER TABLE scheduled_projection_expenses
+    ADD COLUMN IF NOT EXISTS merchant_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE scheduled_projection_expenses
+    ADD COLUMN IF NOT EXISTS account_id TEXT REFERENCES accounts(account_id) ON DELETE SET NULL;
+ALTER TABLE scheduled_projection_expenses
+    ADD COLUMN IF NOT EXISTS tracking_mode TEXT NOT NULL DEFAULT 'fixed';
+ALTER TABLE scheduled_projection_expenses
+    ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE scheduled_projection_expenses
+    DROP CONSTRAINT IF EXISTS scheduled_projection_expenses_tracking_mode_check;
+ALTER TABLE scheduled_projection_expenses
+    ADD CONSTRAINT scheduled_projection_expenses_tracking_mode_check
+    CHECK (tracking_mode IN ('fixed', 'variable'));
+
+CREATE TABLE IF NOT EXISTS subscription_amount_history (
+    history_id BIGSERIAL PRIMARY KEY,
+    expense_id BIGINT NOT NULL REFERENCES scheduled_projection_expenses(expense_id) ON DELETE CASCADE,
+    amount NUMERIC(18, 4) NOT NULL,
+    effective_date DATE NOT NULL,
+    change_type TEXT NOT NULL CHECK (change_type IN ('initial', 'admin_edit', 'confirmed_increase')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (expense_id, amount, effective_date, change_type)
+);
+
+INSERT INTO subscription_amount_history (expense_id, amount, effective_date, change_type)
+SELECT expense_id, amount, first_due_date, 'initial'
+FROM scheduled_projection_expenses
+ON CONFLICT DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS credit_card_statements (
     account_id TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
     due_date DATE NOT NULL,
@@ -298,3 +327,26 @@ CREATE INDEX IF NOT EXISTS transactions_date_idx ON transactions (transaction_da
 CREATE INDEX IF NOT EXISTS transactions_account_date_idx ON transactions (account_id, transaction_date DESC);
 CREATE INDEX IF NOT EXISTS transactions_category_idx ON transactions (category_id);
 CREATE INDEX IF NOT EXISTS transactions_category_match_key_idx ON transactions (category_match_key);
+
+CREATE TABLE IF NOT EXISTS subscription_payment_history (
+    history_id BIGSERIAL PRIMARY KEY,
+    expense_id BIGINT NOT NULL REFERENCES scheduled_projection_expenses(expense_id) ON DELETE CASCADE,
+    transaction_id TEXT NOT NULL REFERENCES transactions(transaction_id) ON DELETE CASCADE,
+    due_date DATE NOT NULL,
+    payment_date DATE NOT NULL,
+    amount NUMERIC(18, 4) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (expense_id, transaction_id)
+);
+
+CREATE TABLE IF NOT EXISTS subscription_increase_reviews (
+    review_id BIGSERIAL PRIMARY KEY,
+    expense_id BIGINT NOT NULL REFERENCES scheduled_projection_expenses(expense_id) ON DELETE CASCADE,
+    transaction_id TEXT NOT NULL REFERENCES transactions(transaction_id) ON DELETE CASCADE,
+    previous_amount NUMERIC(18, 4) NOT NULL,
+    observed_amount NUMERIC(18, 4) NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'dismissed')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    resolved_at TIMESTAMPTZ,
+    UNIQUE (expense_id, transaction_id)
+);

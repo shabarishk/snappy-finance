@@ -25,6 +25,31 @@ func TestSpendCycleStart(t *testing.T) {
 	}
 }
 
+func TestSubscriptionPaymentMatchHelpers(t *testing.T) {
+	tests := []struct {
+		scheduled string
+		actual    string
+		want      bool
+	}{
+		{scheduled: "Northstar Electric", actual: "NORTHSTAR-ELECTRIC PAYMENT", want: true},
+		{scheduled: "StreamBox", actual: "StreamBox Premium", want: true},
+		{scheduled: "StreamBox", actual: "Other StreamBox", want: false},
+		{scheduled: "", actual: "StreamBox", want: false},
+	}
+	for _, test := range tests {
+		if got := sameMerchant(test.scheduled, test.actual); got != test.want {
+			t.Errorf("sameMerchant(%q, %q) = %t, want %t", test.scheduled, test.actual, got, test.want)
+		}
+	}
+
+	if !amountMatchesSchedule(100, 100.75) {
+		t.Error("amounts within the one-dollar tolerance should match")
+	}
+	if amountMatchesSchedule(100, 102) {
+		t.Error("amounts outside the tolerance should require an increase review")
+	}
+}
+
 func TestCalculateIncomeProjectionsIncludesCurrentAndNextTwelveCycles(t *testing.T) {
 	today := time.Date(2026, time.October, 21, 0, 0, 0, 0, time.UTC)
 	periods := calculateIncomeProjections(projectionSettings{}, nil, today)

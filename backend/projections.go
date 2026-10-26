@@ -45,13 +45,20 @@ type scheduledExpense struct {
 	Amount       float64 `json:"amount"`
 	Frequency    string  `json:"frequency"`
 	FirstDueDate string  `json:"first_due_date"`
+	MerchantName string  `json:"merchant_name"`
+	AccountID    *string `json:"account_id"`
+	TrackingMode string  `json:"tracking_mode"`
 }
 
 type scheduledExpenseInput struct {
+	ID           int64   `json:"expense_id"`
 	Name         string  `json:"name"`
 	Amount       float64 `json:"amount"`
 	Frequency    string  `json:"frequency"`
 	FirstDueDate string  `json:"first_due_date"`
+	MerchantName string  `json:"merchant_name"`
+	AccountID    *string `json:"account_id"`
+	TrackingMode string  `json:"tracking_mode"`
 }
 
 type scheduledExpenseOccurrence struct {
@@ -284,12 +291,36 @@ func (a *app) saveScheduledProjectionExpenses(w http.ResponseWriter, r *http.Req
 	for index := range input.Expenses {
 		expense := &input.Expenses[index]
 		expense.Name = strings.TrimSpace(expense.Name)
+		expense.MerchantName = strings.TrimSpace(expense.MerchantName)
+		if expense.AccountID != nil {
+			accountID := strings.TrimSpace(*expense.AccountID)
+			if accountID == "" {
+				expense.AccountID = nil
+			} else {
+				expense.AccountID = &accountID
+			}
+		}
 		if len(expense.Name) == 0 || len(expense.Name) > 100 {
 			writeError(w, http.StatusBadRequest, "scheduled expense names must be 1 to 100 characters")
 			return
 		}
+		if len(expense.MerchantName) > 100 {
+			writeError(w, http.StatusBadRequest, "merchant names must be 100 characters or fewer")
+			return
+		}
 		if expense.Amount < 0 {
 			writeError(w, http.StatusBadRequest, "scheduled expense amounts must be zero or greater")
+			return
+		}
+		if expense.TrackingMode == "" {
+			expense.TrackingMode = "fixed"
+		}
+		if expense.TrackingMode != "fixed" && expense.TrackingMode != "variable" {
+			writeError(w, http.StatusBadRequest, "tracking mode must be fixed or variable")
+			return
+		}
+		if expense.ID < 0 {
+			writeError(w, http.StatusBadRequest, "scheduled expense id is invalid")
 			return
 		}
 		switch expense.Frequency {
@@ -303,6 +334,17 @@ func (a *app) saveScheduledProjectionExpenses(w http.ResponseWriter, r *http.Req
 			return
 		}
 	}
+	seenExpenseIDs := make(map[int64]struct{}, len(input.Expenses))
+	for _, expense := range input.Expenses {
+		if expense.ID == 0 {
+			continue
+		}
+		if _, exists := seenExpenseIDs[expense.ID]; exists {
+			writeError(w, http.StatusBadRequest, "scheduled expense ids must be unique")
+			return
+		}
+		seenExpenseIDs[expense.ID] = struct{}{}
+	}
 
 	tx, err := a.db.Begin(r.Context())
 	if err != nil {
@@ -311,20 +353,83 @@ func (a *app) saveScheduledProjectionExpenses(w http.ResponseWriter, r *http.Req
 		return
 	}
 	defer tx.Rollback(r.Context())
-	if _, err := tx.Exec(r.Context(), "DELETE FROM scheduled_projection_expenses"); err != nil {
-		log.Printf("replace scheduled projection expenses: %v", err)
-		writeError(w, http.StatusInternalServerError, "could not save scheduled expenses")
-		return
-	}
+	keptIDs := make([]int64, 0, len(input.Expenses))
 	for _, expense := range input.Expenses {
-		if _, err := tx.Exec(r.Context(), `
-			INSERT INTO scheduled_projection_expenses (name, amount, frequency, first_due_date)
-			VALUES ($1, $2, $3, $4)`,
-			expense.Name, expense.Amount, expense.Frequency, expense.FirstDueDate); err != nil {
+		if expense.AccountID != nil {
+			var exists bool
+			if err := tx.QueryRow(r.Context(),
+				"SELECT EXISTS (SELECT 1 FROM accounts WHERE account_id = $1)", *expense.AccountID).Scan(&exists); err != nil {
+				log.Printf("validate scheduled expense account: %v", err)
+				writeError(w, http.StatusInternalServerError, "could not validate scheduled expense account")
+				return
+			}
+			if !exists {
+				writeError(w, http.StatusBadRequest, "selected scheduled expense account does not exist")
+				return
+			}
+		}
+		var expenseID int64
+		var oldAmount *float64
+		if expense.ID > 0 {
+			err := tx.QueryRow(r.Context(), `
+				SELECT expense_id, amount
+				FROM scheduled_projection_expenses
+				WHERE expense_id = $1
+				FOR UPDATE`, expense.ID).Scan(&expenseID, &oldAmount)
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					writeError(w, http.StatusBadRequest, "scheduled expense no longer exists")
+				} else {
+					log.Printf("read scheduled expense before update: %v", err)
+					writeError(w, http.StatusInternalServerError, "could not save scheduled expenses")
+				}
+				return
+			}
+			_, err = tx.Exec(r.Context(), `
+				UPDATE scheduled_projection_expenses
+				SET name = $1, amount = $2, frequency = $3, first_due_date = $4,
+					merchant_name = $5, account_id = $6, tracking_mode = $7, active = TRUE
+				WHERE expense_id = $8`,
+				expense.Name, expense.Amount, expense.Frequency, expense.FirstDueDate,
+				expense.MerchantName, expense.AccountID, expense.TrackingMode, expenseID)
+		} else {
+			err = tx.QueryRow(r.Context(), `
+				INSERT INTO scheduled_projection_expenses
+					(name, amount, frequency, first_due_date, merchant_name, account_id, tracking_mode)
+				VALUES ($1, $2, $3, $4, $5, $6, $7)
+				RETURNING expense_id`,
+				expense.Name, expense.Amount, expense.Frequency, expense.FirstDueDate,
+				expense.MerchantName, expense.AccountID, expense.TrackingMode).Scan(&expenseID)
+		}
+		if err != nil {
 			log.Printf("save scheduled projection expense: %v", err)
 			writeError(w, http.StatusInternalServerError, "could not save scheduled expenses")
 			return
 		}
+		if oldAmount == nil {
+			_, err = tx.Exec(r.Context(), `
+				INSERT INTO subscription_amount_history (expense_id, amount, effective_date, change_type)
+				VALUES ($1, $2, $3, 'initial')
+				ON CONFLICT DO NOTHING`, expenseID, expense.Amount, expense.FirstDueDate)
+		} else if *oldAmount != expense.Amount {
+			_, err = tx.Exec(r.Context(), `
+				INSERT INTO subscription_amount_history (expense_id, amount, effective_date, change_type)
+				VALUES ($1, $2, CURRENT_DATE, 'admin_edit')
+				ON CONFLICT DO NOTHING`, expenseID, expense.Amount)
+		}
+		if err != nil {
+			log.Printf("record scheduled expense amount history: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not save scheduled expense history")
+			return
+		}
+		keptIDs = append(keptIDs, expenseID)
+	}
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE scheduled_projection_expenses SET active = FALSE
+		WHERE NOT (expense_id = ANY($1::bigint[]))`, keptIDs); err != nil {
+		log.Printf("archive removed scheduled expenses: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not save scheduled expenses")
+		return
 	}
 	if err := tx.Commit(r.Context()); err != nil {
 		log.Printf("commit scheduled projection expense update: %v", err)
@@ -337,8 +442,10 @@ func (a *app) saveScheduledProjectionExpenses(w http.ResponseWriter, r *http.Req
 func (a *app) loadScheduledExpenses(ctx context.Context) ([]scheduledExpense, error) {
 	expenses := make([]scheduledExpense, 0)
 	rows, err := a.db.Query(ctx, `
-		SELECT expense_id, name, amount, frequency, first_due_date
+		SELECT expense_id, name, amount, frequency, first_due_date,
+			merchant_name, account_id, tracking_mode
 		FROM scheduled_projection_expenses
+		WHERE active = TRUE
 		ORDER BY first_due_date, expense_id`)
 	if err != nil {
 		return nil, err
@@ -347,7 +454,8 @@ func (a *app) loadScheduledExpenses(ctx context.Context) ([]scheduledExpense, er
 	for rows.Next() {
 		var expense scheduledExpense
 		var firstDueDate time.Time
-		if err := rows.Scan(&expense.ID, &expense.Name, &expense.Amount, &expense.Frequency, &firstDueDate); err != nil {
+		if err := rows.Scan(&expense.ID, &expense.Name, &expense.Amount, &expense.Frequency, &firstDueDate,
+			&expense.MerchantName, &expense.AccountID, &expense.TrackingMode); err != nil {
 			return nil, err
 		}
 		expense.FirstDueDate = firstDueDate.Format("2006-01-02")

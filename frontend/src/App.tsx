@@ -77,14 +77,41 @@ type ScheduledExpense = {
   amount: number;
   frequency: ScheduledExpenseFrequency;
   first_due_date: string;
+  merchant_name: string;
+  account_id: string | null;
+  tracking_mode: "fixed" | "variable";
 };
 
 type ScheduledExpenseDraft = {
   key: string;
+  expense_id: number | null;
   name: string;
   amount: string;
   frequency: ScheduledExpenseFrequency;
   first_due_date: string;
+  merchant_name: string;
+  account_id: string;
+  tracking_mode: "fixed" | "variable";
+};
+
+type SubscriptionTrackerPayment = {
+  expense_id: number;
+  name: string;
+  merchant_name: string;
+  account_name: string;
+  due_date: string;
+  amount: number;
+  tracking_mode: "fixed" | "variable";
+  paid: boolean;
+  actual_amount: number | null;
+  payment_date: string | null;
+  pending_review_id: number | null;
+};
+
+type SubscriptionTrackerData = {
+  payments: SubscriptionTrackerPayment[];
+  payment_history: { name: string; merchant_name: string; account_name: string; due_date: string; payment_date: string; amount: number }[];
+  amount_history: { name: string; amount: number; effective_date: string; change_type: string }[];
 };
 
 type ScheduledExpenseOccurrence = {
@@ -229,13 +256,13 @@ function SpendingPieChart({
   const slices = month.categories.map((category, index) => {
     const angle = total > 0 ? (category.amount / total) * Math.PI * 2 : 0;
     const endAngle = startAngle + angle;
-    const startX = 100 + 82 * Math.cos(startAngle);
-    const startY = 100 + 82 * Math.sin(startAngle);
-    const endX = 100 + 82 * Math.cos(endAngle);
-    const endY = 100 + 82 * Math.sin(endAngle);
+    const startX = 100 + 96 * Math.cos(startAngle);
+    const startY = 100 + 96 * Math.sin(startAngle);
+    const endX = 100 + 96 * Math.cos(endAngle);
+    const endY = 100 + 96 * Math.sin(endAngle);
     const path = month.categories.length === 1
       ? ""
-      : `M 100 100 L ${startX} ${startY} A 82 82 0 ${angle > Math.PI ? 1 : 0} 1 ${endX} ${endY} Z`;
+      : `M 100 100 L ${startX} ${startY} A 96 96 0 ${angle > Math.PI ? 1 : 0} 1 ${endX} ${endY} Z`;
     startAngle = endAngle;
     return { ...category, color: liquidityChartColors[index % liquidityChartColors.length], path };
   });
@@ -279,7 +306,7 @@ function SpendingPieChart({
                 key={slice.label}
                 cx="100"
                 cy="100"
-                r="82"
+                r="96"
                 fill={slice.color}
                 role="button"
                 tabIndex={0}
@@ -292,6 +319,7 @@ function SpendingPieChart({
                   }
                 }}
               ><title>{slice.label}: {money(slice.amount)}</title></circle>)}
+            <circle cx="100" cy="100" r="48" fill="white" pointerEvents="none" aria-hidden="true" />
           </svg>
           <ul className="liquidity-legend">
             {slices.map((slice) => (
@@ -441,6 +469,8 @@ export default function App() {
   const [liquidityTransactionsDialog, setLiquidityTransactionsDialog] = useState<LiquidityTransactionsDialog | null>(null);
   const [dashboardLiquidity, setDashboardLiquidity] = useState<DashboardLiquidity | null>(null);
   const [liquidityLoading, setLiquidityLoading] = useState(false);
+  const [subscriptionTracker, setSubscriptionTracker] = useState<SubscriptionTrackerData | null>(null);
+  const [subscriptionTrackerLoading, setSubscriptionTrackerLoading] = useState(false);
   const [selectedLiquidityMonthIndex, setSelectedLiquidityMonthIndex] = useState(1);
   const [dashboardMetrics, setDashboardMetrics] = useState<DashboardMetrics>({
     current_expendable_balance: null,
@@ -642,6 +672,25 @@ export default function App() {
   }, [excludedLiquidityTransactions, excludedSpendCategories, metricsRefreshKey, profile]);
 
   useEffect(() => {
+    if (!profile || activePage !== "overview") return;
+    let cancelled = false;
+    setSubscriptionTrackerLoading(true);
+    api<SubscriptionTrackerData>("/api/dashboard/subscription-tracker")
+      .then((data) => {
+        if (!cancelled) setSubscriptionTracker(data);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Could not load subscription tracker");
+      })
+      .finally(() => {
+        if (!cancelled) setSubscriptionTrackerLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activePage, metricsRefreshKey, profile]);
+
+  useEffect(() => {
     if (profile?.role !== "admin" || activePage !== "administration" || adminSection !== "finance") return;
     let cancelled = false;
     setFinanceSettingsLoading(true);
@@ -682,10 +731,14 @@ export default function App() {
         setProjectionDaysOff(data.settings.days_off.map((date) => date.slice(0, 10)));
         setScheduledExpenseDrafts(data.expenses.map((expense) => ({
           key: String(expense.expense_id),
+          expense_id: expense.expense_id,
           name: expense.name,
           amount: expense.amount.toString(),
           frequency: expense.frequency,
           first_due_date: expense.first_due_date.slice(0, 10),
+          merchant_name: expense.merchant_name ?? "",
+          account_id: expense.account_id ?? "",
+          tracking_mode: expense.tracking_mode ?? "fixed",
         })));
       })
       .catch((err: unknown) => {
@@ -1171,10 +1224,14 @@ export default function App() {
       ...current,
       {
         key: crypto.randomUUID(),
+        expense_id: null,
         name: "",
         amount: "",
         frequency: "monthly",
         first_due_date: transactionDateKey(new Date()),
+        merchant_name: "",
+        account_id: "",
+        tracking_mode: "fixed",
       },
     ]);
   }
@@ -1183,7 +1240,7 @@ export default function App() {
     event.preventDefault();
     setError("");
     setNotice("");
-    const expenses: Omit<ScheduledExpense, "expense_id">[] = [];
+    const expenses: (Omit<ScheduledExpense, "expense_id"> & { expense_id?: number })[] = [];
     for (const expense of scheduledExpenseDrafts) {
       const name = expense.name.trim();
       const amount = Number(expense.amount);
@@ -1192,10 +1249,14 @@ export default function App() {
         return;
       }
       expenses.push({
+        expense_id: expense.expense_id ?? undefined,
         name,
         amount,
         frequency: expense.frequency,
         first_due_date: expense.first_due_date,
+        merchant_name: expense.merchant_name.trim(),
+        account_id: expense.account_id || null,
+        tracking_mode: expense.tracking_mode,
       });
     }
     try {
@@ -1208,6 +1269,22 @@ export default function App() {
       setScheduledExpensesOpen(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save scheduled expenses");
+    }
+  }
+
+  async function resolveSubscriptionIncrease(reviewID: number, confirm: boolean) {
+    setError("");
+    setNotice("");
+    try {
+      await api(`/api/admin/subscription-increases/${reviewID}`, {
+        method: "PATCH",
+        body: JSON.stringify({ confirm }),
+      });
+      setNotice(confirm ? "Subscription amount increase confirmed and recorded." : "Subscription amount increase dismissed.");
+      setMetricsRefreshKey((current) => current + 1);
+      setProjectionRefreshKey((current) => current + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not update subscription amount");
     }
   }
 
@@ -1689,6 +1766,37 @@ export default function App() {
                               <option value="monthly">Monthly</option>
                               <option value="bimonthly">Bimonthly (every 2 months)</option>
                               <option value="annual">Annual</option>
+                            </select>
+                          </label>
+                          <label>Merchant name
+                            <input
+                              type="text"
+                              maxLength={100}
+                              placeholder="e.g. Northstar Electric"
+                              value={expense.merchant_name}
+                              onChange={(event) => setScheduledExpenseDrafts((current) => current.map((item) => item.key === expense.key ? { ...item, merchant_name: event.target.value } : item))}
+                            />
+                          </label>
+                          <label>Payment account
+                            <select
+                              value={expense.account_id}
+                              onChange={(event) => setScheduledExpenseDrafts((current) => current.map((item) => item.key === expense.key ? { ...item, account_id: event.target.value } : item))}
+                            >
+                              <option value="">Select an account</option>
+                              {accounts.map((account) => (
+                                <option key={account.account_id} value={account.account_id}>
+                                  {account.official_name || account.name}{account.mask ? ` ···· ${account.mask}` : ""}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>Amount tracking
+                            <select
+                              value={expense.tracking_mode}
+                              onChange={(event) => setScheduledExpenseDrafts((current) => current.map((item) => item.key === expense.key ? { ...item, tracking_mode: event.target.value as "fixed" | "variable" } : item))}
+                            >
+                              <option value="fixed">Fixed subscription</option>
+                              <option value="variable">Variable bill (e.g. utilities)</option>
                             </select>
                           </label>
                           <label>First due date
@@ -2434,6 +2542,86 @@ export default function App() {
               )}
             </>
           ) : <div className="empty-state">Spend-month expenses are unavailable.</div>}
+        </section>
+
+        <section className="panel subscription-tracker-panel">
+          <div className="panel-heading">
+            <div><h2>Subscription &amp; bill payments</h2><p>Scheduled payments matched by merchant and account. Variable bills are tracked without requiring the same amount each month.</p></div>
+            {profile?.role === "admin" && (
+              <button type="button" className="secondary-button" onClick={() => navigateToPage("projections")}>Manage schedules</button>
+            )}
+          </div>
+          {subscriptionTrackerLoading && !subscriptionTracker ? (
+            <div className="empty-state">Loading scheduled payments…</div>
+          ) : !subscriptionTracker ? (
+            <div className="empty-state">Subscription tracking is unavailable.</div>
+          ) : subscriptionTracker.payments.length === 0 ? (
+            <div className="empty-state compact">No scheduled payments are due this month or next month.</div>
+          ) : (
+            <div className="subscription-tracker-list">
+              {subscriptionTracker.payments.slice().sort((left, right) => left.due_date.localeCompare(right.due_date)).map((payment, index) => {
+                const requiresSetup = !payment.account_name || !payment.merchant_name;
+                const isOverdue = !payment.paid && payment.due_date < transactionDateKey(new Date());
+                return (
+                  <article className={`subscription-payment-row ${payment.pending_review_id ? "subscription-payment-review" : ""}`} key={`${payment.expense_id}-${payment.due_date}-${index}`}>
+                    <div className="subscription-payment-date">{displayDate(payment.due_date, { month: "short", day: "numeric" })}</div>
+                    <div className="subscription-payment-info">
+                      <strong>{payment.name}</strong>
+                      <span>{payment.merchant_name || "Merchant not set"}{payment.account_name ? ` · ${payment.account_name}` : " · Account not set"}</span>
+                      <small>{payment.tracking_mode === "variable" ? "Variable bill" : "Fixed subscription"}</small>
+                    </div>
+                    <div className="subscription-payment-amount">
+                      <strong>{money(payment.actual_amount ?? payment.amount)}</strong>
+                      {payment.paid && payment.actual_amount !== null && payment.actual_amount !== payment.amount && (
+                        <span>Scheduled {money(payment.amount)}</span>
+                      )}
+                    </div>
+                    <div className={`subscription-payment-status ${payment.paid ? "paid" : isOverdue ? "overdue" : ""}`}>
+                      {requiresSetup ? "Needs matching details" : payment.paid ? "Paid" : isOverdue ? "Past due" : "Upcoming"}
+                    </div>
+                    {payment.pending_review_id && profile?.role === "admin" && payment.actual_amount !== null && (
+                      <div className="subscription-increase-prompt">
+                        <p>{payment.name} was charged {money(payment.actual_amount)} instead of {money(payment.amount)}. Confirm the new subscription amount?</p>
+                        <div>
+                          <button type="button" className="primary-button" onClick={() => void resolveSubscriptionIncrease(payment.pending_review_id!, true)}>Confirm increase</button>
+                          <button type="button" className="secondary-button" onClick={() => void resolveSubscriptionIncrease(payment.pending_review_id!, false)}>Not an increase</button>
+                        </div>
+                      </div>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+          )}
+          {(subscriptionTracker?.payment_history.length ?? 0) > 0 && (
+            <div className="subscription-history">
+              <h3>Recent matched payments</h3>
+              <ul>
+                {subscriptionTracker?.payment_history.slice(0, 5).map((payment, index) => (
+                  <li key={`${payment.name}-${payment.payment_date}-${index}`}>
+                    <span><strong>{payment.name}</strong><small>{displayDate(payment.payment_date)} · {payment.account_name}</small></span>
+                    <strong>{money(payment.amount)}</strong>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {subscriptionTracker?.amount_history.some((entry) => entry.change_type === "confirmed_increase" || entry.change_type === "admin_edit") && (
+            <div className="subscription-history">
+              <h3>Subscription amount history</h3>
+              <ul>
+                {subscriptionTracker?.amount_history
+                  .filter((entry) => entry.change_type === "confirmed_increase" || entry.change_type === "admin_edit")
+                  .slice(0, 5)
+                  .map((entry, index) => (
+                    <li key={`${entry.name}-${entry.effective_date}-${index}`}>
+                      <span><strong>{entry.name}</strong><small>{entry.change_type === "confirmed_increase" ? "Increase confirmed" : "Amount edited"} · {displayDate(entry.effective_date)}</small></span>
+                      <strong>{money(entry.amount)}</strong>
+                    </li>
+                  ))}
+              </ul>
+            </div>
+          )}
         </section>
 
         <section className="panel" id="accounts">
