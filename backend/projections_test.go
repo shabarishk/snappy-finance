@@ -70,6 +70,32 @@ func TestSubscriptionTrackerUsesCurrentAndNextTwoSpendMonths(t *testing.T) {
 	}
 }
 
+func TestScheduledPaymentSpendMonthUsesAccountLiquidityRules(t *testing.T) {
+	due := time.Date(2026, time.October, 15, 0, 0, 0, 0, time.UTC)
+	closeDay, dueDay := int16(3), int16(1)
+	if got, want := scheduledPaymentSpendMonth(due, "credit", &closeDay, &dueDay), "2026-11"; got != want {
+		t.Errorf("credit scheduled payment spend month = %s, want %s", got, want)
+	}
+	priorCycleDue := time.Date(2026, time.September, 15, 0, 0, 0, 0, time.UTC)
+	if got, want := scheduledPaymentSpendMonth(priorCycleDue, "credit", &closeDay, &dueDay), "2026-10"; got != want {
+		t.Errorf("prior-cycle credit scheduled payment spend month = %s, want %s", got, want)
+	}
+	if got, want := scheduledPaymentSpendMonth(due, "depository", nil, nil), "2026-10"; got != want {
+		t.Errorf("cash scheduled payment spend month = %s, want %s", got, want)
+	}
+}
+
+func TestSubscriptionTrackerTotalsRemovePaidScheduledAmounts(t *testing.T) {
+	scheduled, paid := subscriptionTrackerTotals([]subscriptionTrackerPayment{
+		{Amount: 100, Paid: true},
+		{Amount: 75, Paid: false},
+		{Amount: 50, Paid: true},
+	})
+	if scheduled != 225 || paid != 150 {
+		t.Fatalf("scheduled/paid totals = %.2f/%.2f, want 225.00/150.00", scheduled, paid)
+	}
+}
+
 func TestCalculateIncomeProjectionsIncludesCurrentAndNextTwelveCycles(t *testing.T) {
 	today := time.Date(2026, time.October, 21, 0, 0, 0, 0, time.UTC)
 	periods := calculateIncomeProjections(projectionSettings{}, nil, today)

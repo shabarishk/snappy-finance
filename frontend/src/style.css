@@ -256,9 +256,8 @@ button { cursor: pointer; }
 .subscription-month-tabs button { background: none; border: 0; border-bottom: 2px solid transparent; color: #74817a; font-size: 11px; min-height: 43px; padding: 0 8px; }
 .subscription-month-tabs button.active { border-bottom-color: var(--green); color: var(--green-dark); font-weight: 600; }
 .subscription-month-tabs button:focus-visible { outline: 2px solid #78b89b; outline-offset: -3px; }
-.subscription-tracker-list { padding: 0 22px; }
-.subscription-payment-row { align-items: center; border-bottom: 1px solid #f0f2f0; column-gap: 14px; display: grid; grid-template-columns: 76px minmax(130px, 1fr) auto auto; padding: 14px 0; row-gap: 8px; }
-.subscription-payment-row:last-child { border-bottom: 0; }
+.subscription-tracker-list { display: grid; gap: 10px 14px; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 0 22px; }
+.subscription-payment-row { align-items: center; background: #fbfcfb; border: 1px solid var(--line); border-radius: 8px; column-gap: 10px; display: grid; grid-template-columns: 62px minmax(0, 1fr) auto; padding: 11px; row-gap: 7px; }
 .subscription-payment-date { color: #52615a; font-size: 11px; font-weight: 600; }
 .subscription-payment-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .subscription-payment-info strong { color: #3b4a43; font-size: 11px; overflow-wrap: anywhere; }
@@ -281,6 +280,16 @@ button { cursor: pointer; }
 .subscription-history li strong { color: #52615a; font-size: 10px; }
 .subscription-history li small { color: var(--muted); font-size: 9px; }
 .subscription-history li > strong { flex: 0 0 auto; white-space: nowrap; }
+
+@media (max-width: 1100px) {
+  .subscription-payment-row { grid-template-columns: 52px minmax(0, 1fr) auto; }
+  .subscription-payment-status { grid-column: 2 / -1; justify-self: start; }
+  .subscription-increase-prompt { grid-column: 1 / -1; }
+}
+
+@media (max-width: 900px) {
+  .subscription-tracker-list { grid-template-columns: minmax(0, 1fr); }
+}
 .liquidity-transactions-backdrop { align-items: center; background: #172a2555; display: flex; inset: 0; justify-content: center; padding: 16px; position: fixed; z-index: 1200; }
 .liquidity-transactions-dialog { background: white; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 18px 48px #172a2533; display: flex; flex-direction: column; max-height: 85vh; max-width: 700px; overflow: hidden; width: 100%; }
 .liquidity-transactions-heading { align-items: center; border-bottom: 1px solid var(--line); display: flex; flex: 0 0 auto; gap: 12px; justify-content: space-between; padding: 18px 22px; }

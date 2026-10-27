@@ -27,8 +27,10 @@ type subscriptionTrackerPayment struct {
 }
 
 type subscriptionTrackerMonth struct {
-	SpendMonth string                       `json:"spend_month"`
-	Payments   []subscriptionTrackerPayment `json:"payments"`
+	SpendMonth                string                       `json:"spend_month"`
+	Payments                  []subscriptionTrackerPayment `json:"payments"`
+	ScheduledExpenseTotal     float64                      `json:"scheduled_expense_total"`
+	PaidScheduledExpenseTotal float64                      `json:"paid_scheduled_expense_total"`
 }
 
 type subscriptionPaymentHistory struct {
@@ -55,7 +57,8 @@ func (a *app) getSubscriptionTracker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	startMonth = time.Date(startMonth.Year(), startMonth.Month(), 1, 0, 0, 0, 0, time.UTC)
-	periodStart, periodEnd, monthKeys := subscriptionTrackerPeriod(startMonth)
+	_, periodEnd, monthKeys := subscriptionTrackerPeriod(startMonth)
+	occurrenceStart := startMonth.AddDate(0, -1, 0)
 	paymentsByMonth := make(map[string][]subscriptionTrackerPayment, 3)
 	for _, monthKey := range monthKeys {
 		paymentsByMonth[monthKey] = make([]subscriptionTrackerPayment, 0)
@@ -69,9 +72,6 @@ func (a *app) getSubscriptionTracker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, expense := range expenses {
-		if expense.Frequency == "one_time" {
-			continue
-		}
 		dueDate, err := time.Parse("2006-01-02", expense.FirstDueDate)
 		if err != nil {
 			log.Printf("parse scheduled expense date for tracker: %v", err)
@@ -94,15 +94,8 @@ func (a *app) getSubscriptionTracker(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		usedTransactions := make(map[string]bool)
-		for _, due := range scheduledExpenseDueDates(expense.Frequency, dueDate, periodStart, periodEnd) {
-			spendMonth := spendMonthForDate(due).Format("2006-01")
-			if expense.AccountID != nil {
-				var included bool
-				spendMonth, included = transactionSpendMonth(due, accountType, closeDay, dueDay)
-				if !included {
-					continue
-				}
-			}
+		for _, due := range scheduledExpenseDueDates(expense.Frequency, dueDate, occurrenceStart, periodEnd) {
+			spendMonth := scheduledPaymentSpendMonth(due, accountType, closeDay, dueDay)
 			if _, included := paymentsByMonth[spendMonth]; !included {
 				continue
 			}
@@ -236,10 +229,12 @@ func (a *app) getSubscriptionTracker(w http.ResponseWriter, r *http.Request) {
 
 	months := make([]subscriptionTrackerMonth, 0, len(monthKeys))
 	for _, monthKey := range monthKeys {
-		months = append(months, subscriptionTrackerMonth{
+		month := subscriptionTrackerMonth{
 			SpendMonth: monthKey,
 			Payments:   paymentsByMonth[monthKey],
-		})
+		}
+		month.ScheduledExpenseTotal, month.PaidScheduledExpenseTotal = subscriptionTrackerTotals(month.Payments)
+		months = append(months, month)
 	}
 
 	paymentHistory := make([]subscriptionPaymentHistory, 0)
@@ -406,6 +401,26 @@ func subscriptionTrackerPeriod(startMonth time.Time) (time.Time, time.Time, []st
 		monthKeys[index] = startMonth.AddDate(0, index, 0).Format("2006-01")
 	}
 	return startMonth.AddDate(0, 0, 3), startMonth.AddDate(0, 3, 2), monthKeys
+}
+
+func scheduledPaymentSpendMonth(due time.Time, accountType string, closeDay, dueDay *int16) string {
+	if accountType != "" {
+		if spendMonth, included := transactionSpendMonth(due, accountType, closeDay, dueDay); included {
+			return spendMonth
+		}
+	}
+	return spendMonthForDate(due).Format("2006-01")
+}
+
+func subscriptionTrackerTotals(payments []subscriptionTrackerPayment) (float64, float64) {
+	var scheduledTotal, paidTotal float64
+	for _, payment := range payments {
+		scheduledTotal += payment.Amount
+		if payment.Paid {
+			paidTotal += payment.Amount
+		}
+	}
+	return scheduledTotal, paidTotal
 }
 
 func amountMatchesSchedule(expected, actual float64) bool {

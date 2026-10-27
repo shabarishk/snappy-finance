@@ -109,7 +109,12 @@ type SubscriptionTrackerPayment = {
 };
 
 type SubscriptionTrackerData = {
-  months: { spend_month: string; payments: SubscriptionTrackerPayment[] }[];
+  months: {
+    spend_month: string;
+    payments: SubscriptionTrackerPayment[];
+    scheduled_expense_total: number;
+    paid_scheduled_expense_total: number;
+  }[];
   payment_history: { name: string; merchant_name: string; account_name: string; due_date: string; payment_date: string; amount: number }[];
   amount_history: { name: string; amount: number; effective_date: string; change_type: string }[];
 };
@@ -2521,11 +2526,16 @@ export default function App() {
             <>
               {dashboardLiquidity.months.length > 0 && (() => {
                 const monthIndex = Math.min(selectedLiquidityMonthIndex, dashboardLiquidity.months.length - 1);
+                const liquidityMonth = dashboardLiquidity.months[monthIndex];
+                const trackerMonth = subscriptionTracker?.months.find((month) => month.spend_month === liquidityMonth.spend_month);
+                const scheduledExpenseTotal = trackerMonth
+                  ? Math.max(0, trackerMonth.scheduled_expense_total - trackerMonth.paid_scheduled_expense_total)
+                  : liquidityMonth.scheduled_expense_total;
                 return (
                   <div className="liquidity-month-grid">
                     <SpendingPieChart
-                      key={dashboardLiquidity.months[monthIndex].spend_month}
-                      month={dashboardLiquidity.months[monthIndex]}
+                      key={liquidityMonth.spend_month}
+                      month={{ ...liquidityMonth, scheduled_expense_total: scheduledExpenseTotal }}
                       showForecast={monthIndex > 0}
                       canGoPrevious={monthIndex > 0}
                       canGoNext={monthIndex < dashboardLiquidity.months.length - 1}
@@ -2616,19 +2626,6 @@ export default function App() {
                   </div>
                 );
               })()}
-            </div>
-          )}
-          {(subscriptionTracker?.payment_history.length ?? 0) > 0 && (
-            <div className="subscription-history">
-              <h3>Recent matched payments</h3>
-              <ul>
-                {subscriptionTracker?.payment_history.slice(0, 5).map((payment, index) => (
-                  <li key={`${payment.name}-${payment.payment_date}-${index}`}>
-                    <span><strong>{payment.name}</strong><small>{displayDate(payment.payment_date)} · {payment.account_name}</small></span>
-                    <strong>{money(payment.amount)}</strong>
-                  </li>
-                ))}
-              </ul>
             </div>
           )}
           {subscriptionTracker?.amount_history.some((entry) => entry.change_type === "confirmed_increase" || entry.change_type === "admin_edit") && (
