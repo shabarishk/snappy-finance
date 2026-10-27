@@ -78,23 +78,9 @@ func (a *app) getSubscriptionTracker(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "could not load subscription tracker")
 			return
 		}
-		usedTransactions := make(map[string]bool)
-		for _, due := range scheduledExpenseDueDates(expense.Frequency, dueDate, periodStart, periodEnd) {
-			spendMonth := spendMonthForDate(due).Format("2006-01")
-			payment := subscriptionTrackerPayment{
-				ExpenseID:    expense.ID,
-				Name:         expense.Name,
-				MerchantName: expense.MerchantName,
-				DueDate:      due.Format("2006-01-02"),
-				Amount:       expense.Amount,
-				TrackingMode: expense.TrackingMode,
-			}
-			if expense.AccountID == nil || expense.MerchantName == "" {
-				paymentsByMonth[spendMonth] = append(paymentsByMonth[spendMonth], payment)
-				continue
-			}
-			var accountName, accountType string
-			var closeDay, dueDay *int16
+		accountName, accountType := "", ""
+		var closeDay, dueDay *int16
+		if expense.AccountID != nil {
 			if err := a.db.QueryRow(r.Context(),
 				`SELECT COALESCE(account.official_name, account.name), account.type,
 					cycle.statement_close_day, cycle.statement_due_day
@@ -106,8 +92,39 @@ func (a *app) getSubscriptionTracker(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, "could not load subscription tracker")
 				return
 			}
-			payment.AccountName = accountName
-			spendMonthDate := spendMonthForDate(due)
+		}
+		usedTransactions := make(map[string]bool)
+		for _, due := range scheduledExpenseDueDates(expense.Frequency, dueDate, periodStart, periodEnd) {
+			spendMonth := spendMonthForDate(due).Format("2006-01")
+			if expense.AccountID != nil {
+				var included bool
+				spendMonth, included = transactionSpendMonth(due, accountType, closeDay, dueDay)
+				if !included {
+					continue
+				}
+			}
+			if _, included := paymentsByMonth[spendMonth]; !included {
+				continue
+			}
+			payment := subscriptionTrackerPayment{
+				ExpenseID:    expense.ID,
+				Name:         expense.Name,
+				MerchantName: expense.MerchantName,
+				DueDate:      due.Format("2006-01-02"),
+				Amount:       expense.Amount,
+				TrackingMode: expense.TrackingMode,
+				AccountName:  accountName,
+			}
+			if expense.AccountID == nil || expense.MerchantName == "" {
+				paymentsByMonth[spendMonth] = append(paymentsByMonth[spendMonth], payment)
+				continue
+			}
+			spendMonthDate, err := time.Parse("2006-01", spendMonth)
+			if err != nil {
+				log.Printf("parse scheduled payment spend month: %v", err)
+				writeError(w, http.StatusInternalServerError, "could not load subscription tracker")
+				return
+			}
 			cycleStart := time.Date(spendMonthDate.Year(), spendMonthDate.Month(), 4, 0, 0, 0, 0, time.UTC)
 			cycleEnd := cycleStart.AddDate(0, 1, 0).AddDate(0, 0, -1)
 			transactionStart := cycleStart
