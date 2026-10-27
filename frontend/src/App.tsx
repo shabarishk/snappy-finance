@@ -454,6 +454,9 @@ export default function App() {
   const [transactionPageSize, setTransactionPageSize] = useState(25);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [dashboardPreferencesOpen, setDashboardPreferencesOpen] = useState(false);
+  const [transactionFiltersOpen, setTransactionFiltersOpen] = useState(false);
+  const [selectedExpenseCategoryIDs, setSelectedExpenseCategoryIDs] = useState<string[]>([]);
+  const [hideUncategorizedTransactions, setHideUncategorizedTransactions] = useState(false);
   const [projectionAssumptionsOpen, setProjectionAssumptionsOpen] = useState(false);
   const [scheduledExpensesOpen, setScheduledExpensesOpen] = useState(false);
   const [username, setUsername] = useState("");
@@ -519,6 +522,7 @@ export default function App() {
 
   useEffect(() => {
     if (activePage !== "overview") setDashboardPreferencesOpen(false);
+    if (activePage !== "transactions") setTransactionFiltersOpen(false);
     if (activePage !== "projections") setProjectionAssumptionsOpen(false);
     if (activePage !== "projections") setScheduledExpensesOpen(false);
   }, [activePage]);
@@ -559,11 +563,12 @@ export default function App() {
   }, [monthPickerOpen]);
 
   useEffect(() => {
-    if (!sidebarOpen && !dashboardPreferencesOpen && !projectionAssumptionsOpen && !scheduledExpensesOpen && !pendingCategoryChange && !liquidityTransactionsDialog) return;
+    if (!sidebarOpen && !dashboardPreferencesOpen && !transactionFiltersOpen && !projectionAssumptionsOpen && !scheduledExpensesOpen && !pendingCategoryChange && !liquidityTransactionsDialog) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setSidebarOpen(false);
         setDashboardPreferencesOpen(false);
+        setTransactionFiltersOpen(false);
         setProjectionAssumptionsOpen(false);
         setScheduledExpensesOpen(false);
         setPendingCategoryChange(null);
@@ -577,12 +582,13 @@ export default function App() {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [dashboardPreferencesOpen, liquidityTransactionsDialog, pendingCategoryChange, projectionAssumptionsOpen, scheduledExpensesOpen, sidebarOpen]);
+  }, [dashboardPreferencesOpen, liquidityTransactionsDialog, pendingCategoryChange, projectionAssumptionsOpen, scheduledExpensesOpen, sidebarOpen, transactionFiltersOpen]);
 
   function navigateToPage(page: "overview" | "administration" | "transactions" | "projections") {
     setActivePage(page);
     setSidebarOpen(false);
     setDashboardPreferencesOpen(false);
+    setTransactionFiltersOpen(false);
     setProjectionAssumptionsOpen(false);
     setScheduledExpensesOpen(false);
     setMonthPickerOpen(false);
@@ -850,9 +856,13 @@ export default function App() {
       const matchesType = activeTransactionTab === "other"
         ? !["depository", "credit", "loan"].includes(type)
         : type === activeTransactionTab;
-      return matchesType && (selectedTransactionAccountIDs === null || selectedTransactionAccountIDs.includes(item.account_id));
+      const matchesAccount = selectedTransactionAccountIDs === null || selectedTransactionAccountIDs.includes(item.account_id);
+      const matchesCategory = selectedExpenseCategoryIDs.length === 0 ||
+        (item.amount > 0 && item.category_id !== null && selectedExpenseCategoryIDs.includes(item.category_id));
+      const matchesCategoryAssignment = !hideUncategorizedTransactions || item.category_id !== null;
+      return matchesType && matchesAccount && matchesCategory && matchesCategoryAssignment;
     });
-  }, [accountsByID, activeTransactionTab, selectedTransactionAccountIDs, transactions]);
+  }, [accountsByID, activeTransactionTab, hideUncategorizedTransactions, selectedExpenseCategoryIDs, selectedTransactionAccountIDs, transactions]);
   const transactionPageCount = Math.max(1, Math.ceil(visibleTransactions.length / transactionPageSize));
   const currentTransactionPage = Math.min(transactionPage, transactionPageCount);
   const pageTransactions = useMemo(() => {
@@ -883,6 +893,13 @@ export default function App() {
         ? [...new Set([...selected, accountID])]
         : selected.filter((id) => id !== accountID);
     });
+    setTransactionPage(1);
+  }
+
+  function updateExpenseCategorySelection(categoryID: string, checked: boolean) {
+    setSelectedExpenseCategoryIDs((current) => checked
+      ? [...new Set([...current, categoryID])]
+      : current.filter((id) => id !== categoryID));
     setTransactionPage(1);
   }
 
@@ -1355,32 +1372,6 @@ export default function App() {
           ))}
         </div>
         <div className="transactions-content">
-          {transactionAccounts.length > 1 && (
-            <div className="transaction-account-filters" role="group" aria-label="Filter transactions by account">
-              <strong>Accounts</strong>
-              <label className="transaction-account-filter">
-                <input
-                  type="checkbox"
-                  checked={selectedTransactionAccountIDs === null || transactionAccounts.every((account) => selectedTransactionAccountIDs.includes(account.account_id))}
-                  onChange={(event) => {
-                    setSelectedTransactionAccountIDs(event.target.checked ? null : []);
-                    setTransactionPage(1);
-                  }}
-                />
-                All accounts
-              </label>
-              {transactionAccounts.map((account) => (
-                <label className="transaction-account-filter" key={account.account_id}>
-                  <input
-                    type="checkbox"
-                    checked={selectedTransactionAccountIDs === null || selectedTransactionAccountIDs.includes(account.account_id)}
-                    onChange={(event) => updateTransactionAccountSelection(account.account_id, event.target.checked)}
-                  />
-                  {account.official_name || account.name}{account.mask ? ` ···· ${account.mask}` : ""}
-                </label>
-              ))}
-            </div>
-          )}
           <div className="transaction-list-toolbar">
             <span>Showing {firstTransactionNumber}–{lastTransactionNumber} of {visibleTransactions.length}</span>
             <label className="page-size-control">
@@ -1405,6 +1396,8 @@ export default function App() {
                 ? "Transactions will appear here after your first account sync."
                 : selectedTransactionAccountIDs !== null && selectedTransactionAccountIDs.length === 0
                   ? "Select one or more accounts to see transactions."
+                  : selectedExpenseCategoryIDs.length > 0 || hideUncategorizedTransactions
+                    ? "No transactions match the selected filters."
                   : `No transactions for ${transactionTabs.find((tab) => tab.id === activeTransactionTab)?.label.toLowerCase() ?? "this account type"} yet.`}
             </div>
           ) : (
@@ -2117,6 +2110,18 @@ export default function App() {
                 <Filter size={16} /> Filter
               </button>
             )}
+            {activePage === "transactions" && (
+              <button
+                type="button"
+                className="secondary-button filter-button"
+                aria-expanded={transactionFiltersOpen}
+                aria-haspopup="dialog"
+                aria-controls="transaction-filters"
+                onClick={() => setTransactionFiltersOpen(true)}
+              >
+                <Filter size={16} /> Filters
+              </button>
+            )}
             {activePage === "overview" && profile?.role === "admin" && <>
               <button className="secondary-button" onClick={() => void syncNow()} disabled={busy || !accounts.some((account) => !account.demo_data)}>
                 <RefreshCw size={16} className={busy ? "spin" : ""} /> Sync
@@ -2362,6 +2367,109 @@ export default function App() {
               <div className="alert demo-banner">Demo data — these fictional accounts and transactions are for local testing only.</div>
             )}
             {transactionsPanel}
+            <button
+              type="button"
+              className={`dashboard-preferences-backdrop ${transactionFiltersOpen ? "visible" : ""}`}
+              aria-label="Close transaction filters"
+              aria-hidden={!transactionFiltersOpen}
+              tabIndex={transactionFiltersOpen ? 0 : -1}
+              onClick={() => setTransactionFiltersOpen(false)}
+            />
+            <aside
+              id="transaction-filters"
+              className={`dashboard-preferences-drawer transaction-filters-drawer ${transactionFiltersOpen ? "open" : ""}`}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="transaction-filters-title"
+              aria-hidden={!transactionFiltersOpen}
+            >
+              <section className="panel settings-panel">
+                <div className="panel-heading preferences-drawer-heading">
+                  <div><h2 id="transaction-filters-title">Transaction filters</h2><p>Filter the current account type by account, expense category, or category assignment.</p></div>
+                  <button
+                    type="button"
+                    className="preferences-drawer-close"
+                    aria-label="Close transaction filters"
+                    onClick={() => setTransactionFiltersOpen(false)}
+                  ><X size={18} /></button>
+                </div>
+                {transactionAccounts.length > 1 && (
+                  <div className="preference-list transaction-filter-section">
+                    <strong className="preference-list-heading">Accounts</strong>
+                    <label className="preference-option">
+                      <input
+                        type="checkbox"
+                        checked={selectedTransactionAccountIDs === null || transactionAccounts.every((account) => selectedTransactionAccountIDs.includes(account.account_id))}
+                        onChange={(event) => {
+                          setSelectedTransactionAccountIDs(event.target.checked ? null : []);
+                          setTransactionPage(1);
+                        }}
+                      />
+                      All accounts
+                    </label>
+                    {transactionAccounts.map((account) => (
+                      <label className="preference-option" key={account.account_id}>
+                        <input
+                          type="checkbox"
+                          checked={selectedTransactionAccountIDs === null || selectedTransactionAccountIDs.includes(account.account_id)}
+                          onChange={(event) => updateTransactionAccountSelection(account.account_id, event.target.checked)}
+                        />
+                        {account.official_name || account.name}{account.mask ? ` ···· ${account.mask}` : ""}
+                      </label>
+                    ))}
+                  </div>
+                )}
+                <div className="preference-list transaction-filter-section">
+                  <strong className="preference-list-heading">Expense categories</strong>
+                  <p className="transaction-filter-help">Select one or more categories to show only those expenses. With none selected, all categories are shown.</p>
+                  <button
+                    type="button"
+                    className="secondary-button transaction-filter-clear-categories"
+                    onClick={() => {
+                      setSelectedExpenseCategoryIDs([]);
+                      setTransactionPage(1);
+                    }}
+                    disabled={selectedExpenseCategoryIDs.length === 0}
+                  >Clear category selection</button>
+                  {transactionCategories.filter((category) => category.category_type === "expense").map((category) => (
+                    <label className="preference-option" key={category.category_id}>
+                      <input
+                        type="checkbox"
+                        checked={selectedExpenseCategoryIDs.includes(category.category_id)}
+                        onChange={(event) => updateExpenseCategorySelection(category.category_id, event.target.checked)}
+                      />
+                      {category.label}
+                    </label>
+                  ))}
+                </div>
+                <div className="preference-list transaction-filter-section">
+                  <strong className="preference-list-heading">Category assignment</strong>
+                  <label className="preference-option">
+                    <input
+                      type="checkbox"
+                      checked={hideUncategorizedTransactions}
+                      onChange={(event) => {
+                        setHideUncategorizedTransactions(event.target.checked);
+                        setTransactionPage(1);
+                      }}
+                    />
+                    Hide transactions without an admin-selected category
+                  </label>
+                </div>
+                <div className="transaction-filter-actions">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => {
+                      setSelectedTransactionAccountIDs(null);
+                      setSelectedExpenseCategoryIDs([]);
+                      setHideUncategorizedTransactions(false);
+                      setTransactionPage(1);
+                    }}
+                  >Clear all filters</button>
+                </div>
+              </section>
+            </aside>
           </>
         ) : activePage === "projections" ? (
           projectionsPanel

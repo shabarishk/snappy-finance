@@ -33,6 +33,11 @@ button { cursor: pointer; }
 .dashboard-preferences-drawer { background: #f7f8f5; bottom: 0; box-shadow: -14px 0 40px #172a2522; height: 100vh; height: 100dvh; overflow-y: auto; padding: 18px; position: fixed; right: 0; top: 0; transform: translateX(102%); transition: transform .25s ease, visibility 0s linear .25s; visibility: hidden; width: min(440px, 94vw); z-index: 1101; }
 .dashboard-preferences-drawer.open { transform: translateX(0); transition: transform .25s ease; visibility: visible; }
 .dashboard-preferences-drawer .settings-panel { margin: 0; min-height: 100%; }
+.transaction-filters-drawer { width: min(460px, 95vw); }
+.transaction-filter-section { border-bottom: 1px solid var(--line); }
+.transaction-filter-help { color: var(--muted); font-size: 10px; line-height: 1.5; margin: 0; }
+.transaction-filter-clear-categories { min-height: 34px; padding: 0 10px; }
+.transaction-filter-actions { display: flex; justify-content: flex-end; padding: 16px 21px; }
 .projection-assumptions-drawer { width: min(620px, 96vw); }
 .projection-assumptions-drawer .projection-assumptions-drawer-panel { min-height: auto; overflow: visible; }
 .scheduled-expenses-drawer { width: min(920px, 98vw); }
@@ -95,10 +100,6 @@ button { cursor: pointer; }
 .transaction-tab.active { background: #f0f8f3; border-left-color: var(--green); color: var(--green-dark); }
 .transaction-tab:focus-visible { outline: 2px solid #78b89b; outline-offset: -2px; }
 .transactions-content { min-width: 0; }
-.transaction-account-filters { align-items: center; background: #fbfcfb; border-bottom: 1px solid #eff1ef; display: flex; flex-wrap: wrap; gap: 9px 16px; padding: 11px 22px; }
-.transaction-account-filters > strong { color: #52615a; font-size: 10px; }
-.transaction-account-filter { align-items: center; color: #65736c; display: inline-flex; font-size: 10px; gap: 6px; max-width: 100%; }
-.transaction-account-filter input { accent-color: var(--green); margin: 0; }
 .category-scope-backdrop { align-items: center; background: #172a2555; display: flex; inset: 0; justify-content: center; padding: 16px; position: fixed; z-index: 1200; }
 .category-scope-dialog { background: white; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 18px 48px #172a2533; max-width: 520px; padding: 22px; width: 100%; }
 .category-scope-dialog h2 { color: #34463e; font-size: 16px; margin: 0 0 12px; }
@@ -378,7 +379,6 @@ footer { color: #9aa39e; font-size: 10px; padding: 6px 0 16px; }
   .topbar-actions { width: 100%; }
   .topbar-actions button { flex: 1; }
   .panel-heading, .account-list, .transaction-list { padding-left: 15px; padding-right: 15px; }
-  .transaction-account-filters { padding-left: 15px; padding-right: 15px; }
 }
 
 @media (max-width: 720px) and (orientation: portrait) {
@@ -416,16 +416,16 @@ footer { color: #9aa39e; font-size: 10px; padding: 6px 0 16px; }
 
 @media (max-width: 720px) {
   .transactions-layout { grid-template-columns: minmax(0, 1fr); }
-  .transaction-tabs { border-bottom: 1px solid var(--line); border-right: 0; flex-direction: row; overflow-x: auto; padding: 8px 12px 0;     .subscription-tracker-panel .panel-heading { align-items: flex-start; flex-direction: column; }
+  .transaction-tabs { border-bottom: 1px solid var(--line); border-right: 0; flex-direction: row; overflow-x: auto; padding: 8px 12px 0; }
+  .subscription-tracker-panel .panel-heading { align-items: flex-start; flex-direction: column; }
   .subscription-month-tabs { padding-left: 15px; padding-right: 15px; }
   .subscription-month-tabs button { font-size: 10px; }
-    .subscription-tracker-list { padding-left: 15px; padding-right: 15px; }
-    .subscription-payment-row { column-gap: 9px; grid-template-columns: 55px minmax(0, 1fr) auto; }
-    .subscription-payment-amount { grid-column: 3; grid-row: 1; }
-    .subscription-payment-status { grid-column: 2 / -1; justify-self: start; }
-    .subscription-increase-prompt { grid-column: 1 / -1; }
-    .subscription-history { padding-left: 15px; padding-right: 15px; }
-  }
+  .subscription-tracker-list { padding-left: 15px; padding-right: 15px; }
+  .subscription-payment-row { column-gap: 9px; grid-template-columns: 55px minmax(0, 1fr) auto; }
+  .subscription-payment-amount { grid-column: 3; grid-row: 1; }
+  .subscription-payment-status { grid-column: 2 / -1; justify-self: start; }
+  .subscription-increase-prompt { grid-column: 1 / -1; }
+  .subscription-history { padding-left: 15px; padding-right: 15px; }
   .transaction-tab { border-bottom: 2px solid transparent; border-left: 0; flex: 1 0 105px; text-align: center; }
   .transaction-tab.active { background: none; border-bottom-color: var(--green); }
   .transaction-list-toolbar { padding-left: 15px; padding-right: 15px; }
@@ -468,7 +468,6 @@ footer { color: #9aa39e; font-size: 10px; padding: 6px 0 16px; }
   .panel-heading, .account-list, .transaction-list { padding-left: 12px; padding-right: 12px; }
   .transaction-tabs { padding-left: 8px; padding-right: 8px; }
   .transaction-list-toolbar { padding-left: 12px; padding-right: 12px; }
-  .transaction-account-filters { padding-left: 12px; padding-right: 12px; }
   .category-scope-actions { justify-content: stretch; }
   .category-scope-actions button { flex: 1 1 auto; }
 }
