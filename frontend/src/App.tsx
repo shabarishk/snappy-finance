@@ -456,7 +456,7 @@ export default function App() {
   const [dashboardPreferencesOpen, setDashboardPreferencesOpen] = useState(false);
   const [transactionFiltersOpen, setTransactionFiltersOpen] = useState(false);
   const [selectedExpenseCategoryIDs, setSelectedExpenseCategoryIDs] = useState<string[]>([]);
-  const [hideUncategorizedTransactions, setHideUncategorizedTransactions] = useState(false);
+  const [showOnlyUncategorizedTransactions, setShowOnlyUncategorizedTransactions] = useState(false);
   const [projectionAssumptionsOpen, setProjectionAssumptionsOpen] = useState(false);
   const [scheduledExpensesOpen, setScheduledExpensesOpen] = useState(false);
   const [username, setUsername] = useState("");
@@ -857,12 +857,13 @@ export default function App() {
         ? !["depository", "credit", "loan"].includes(type)
         : type === activeTransactionTab;
       const matchesAccount = selectedTransactionAccountIDs === null || selectedTransactionAccountIDs.includes(item.account_id);
-      const matchesCategory = selectedExpenseCategoryIDs.length === 0 ||
-        (item.amount > 0 && item.category_id !== null && selectedExpenseCategoryIDs.includes(item.category_id));
-      const matchesCategoryAssignment = !hideUncategorizedTransactions || item.category_id !== null;
-      return matchesType && matchesAccount && matchesCategory && matchesCategoryAssignment;
+      const matchesCategory = showOnlyUncategorizedTransactions
+        ? item.category_id === null
+        : selectedExpenseCategoryIDs.length === 0 ||
+          (item.amount > 0 && item.category_id !== null && selectedExpenseCategoryIDs.includes(item.category_id));
+      return matchesType && matchesAccount && matchesCategory;
     });
-  }, [accountsByID, activeTransactionTab, hideUncategorizedTransactions, selectedExpenseCategoryIDs, selectedTransactionAccountIDs, transactions]);
+  }, [accountsByID, activeTransactionTab, selectedExpenseCategoryIDs, selectedTransactionAccountIDs, showOnlyUncategorizedTransactions, transactions]);
   const transactionPageCount = Math.max(1, Math.ceil(visibleTransactions.length / transactionPageSize));
   const currentTransactionPage = Math.min(transactionPage, transactionPageCount);
   const pageTransactions = useMemo(() => {
@@ -897,6 +898,7 @@ export default function App() {
   }
 
   function updateExpenseCategorySelection(categoryID: string, checked: boolean) {
+    setShowOnlyUncategorizedTransactions(false);
     setSelectedExpenseCategoryIDs((current) => checked
       ? [...new Set([...current, categoryID])]
       : current.filter((id) => id !== categoryID));
@@ -1396,7 +1398,7 @@ export default function App() {
                 ? "Transactions will appear here after your first account sync."
                 : selectedTransactionAccountIDs !== null && selectedTransactionAccountIDs.length === 0
                   ? "Select one or more accounts to see transactions."
-                  : selectedExpenseCategoryIDs.length > 0 || hideUncategorizedTransactions
+                  : selectedExpenseCategoryIDs.length > 0 || showOnlyUncategorizedTransactions
                     ? "No transactions match the selected filters."
                   : `No transactions for ${transactionTabs.find((tab) => tab.id === activeTransactionTab)?.label.toLowerCase() ?? "this account type"} yet.`}
             </div>
@@ -2442,20 +2444,24 @@ export default function App() {
                     </label>
                   ))}
                 </div>
-                <div className="preference-list transaction-filter-section">
-                  <strong className="preference-list-heading">Category assignment</strong>
-                  <label className="preference-option">
-                    <input
-                      type="checkbox"
-                      checked={hideUncategorizedTransactions}
-                      onChange={(event) => {
-                        setHideUncategorizedTransactions(event.target.checked);
-                        setTransactionPage(1);
-                      }}
-                    />
-                    Hide transactions without an admin-selected category
-                  </label>
-                </div>
+                {profile?.role === "admin" && (
+                  <div className="preference-list transaction-filter-section">
+                    <strong className="preference-list-heading">Category assignment</strong>
+                    <p className="transaction-filter-help">Show unassigned transactions to review and categorize them.</p>
+                    <label className="preference-option">
+                      <input
+                        type="checkbox"
+                        checked={showOnlyUncategorizedTransactions}
+                        onChange={(event) => {
+                          setShowOnlyUncategorizedTransactions(event.target.checked);
+                          if (event.target.checked) setSelectedExpenseCategoryIDs([]);
+                          setTransactionPage(1);
+                        }}
+                      />
+                      Show only transactions without an admin-selected category
+                    </label>
+                  </div>
+                )}
                 <div className="transaction-filter-actions">
                   <button
                     type="button"
@@ -2463,7 +2469,7 @@ export default function App() {
                     onClick={() => {
                       setSelectedTransactionAccountIDs(null);
                       setSelectedExpenseCategoryIDs([]);
-                      setHideUncategorizedTransactions(false);
+                      setShowOnlyUncategorizedTransactions(false);
                       setTransactionPage(1);
                     }}
                   >Clear all filters</button>
