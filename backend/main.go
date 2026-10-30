@@ -259,12 +259,13 @@ func (a *app) exchangePublicToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) syncNow(w http.ResponseWriter, r *http.Request) {
-	if err := a.syncAll(r.Context()); err != nil {
+	warnings, err := a.syncAll(r.Context())
+	if err != nil {
 		log.Printf("manual Plaid sync: %v", err)
 		writeError(w, http.StatusBadGateway, "sync failed; check the API logs")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"synced": true})
+	writeJSON(w, http.StatusOK, map[string]any{"synced": true, "warnings": warnings})
 }
 
 func (a *app) syncAccount(w http.ResponseWriter, r *http.Request) {
@@ -291,6 +292,10 @@ func (a *app) syncAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := a.syncItem(r.Context(), itemID); err != nil {
 		log.Printf("sync Plaid account %s: %v", accountID, err)
+		if isPlaidItemNotFound(err) {
+			writeError(w, http.StatusConflict, "Plaid no longer recognizes this connection. Use Unlink connection on the Accounts page to remove its stale local data.")
+			return
+		}
 		writeError(w, http.StatusBadGateway, "account connection sync failed; check the API logs")
 		return
 	}
@@ -336,9 +341,12 @@ func (a *app) unlinkAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.plaid.removeItem(r.Context(), accessToken); err != nil {
-		log.Printf("remove Plaid Item %s: %v", itemID, err)
-		writeError(w, http.StatusBadGateway, "Plaid could not unlink this connection")
-		return
+		if !isPlaidItemNotFound(err) {
+			log.Printf("remove Plaid Item %s: %v", itemID, err)
+			writeError(w, http.StatusBadGateway, "Plaid could not unlink this connection")
+			return
+		}
+		log.Printf("Plaid Item %s was already absent; clearing its local connection", itemID)
 	}
 
 	tx, err := a.db.Begin(r.Context())
@@ -696,32 +704,47 @@ func (a *app) refreshAccounts(ctx context.Context, itemID, accessToken string) e
 	return tx.Commit(ctx)
 }
 
-func (a *app) syncAll(ctx context.Context) error {
+func (a *app) syncAll(ctx context.Context) ([]string, error) {
 	rows, err := a.db.Query(ctx, "SELECT item_id FROM plaid_items WHERE demo_data = FALSE ORDER BY item_id")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var itemIDs []string
 	for rows.Next() {
 		var itemID string
 		if err := rows.Scan(&itemID); err != nil {
 			rows.Close()
-			return err
+			return nil, err
 		}
 		itemIDs = append(itemIDs, itemID)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return err
+		return nil, err
 	}
 	rows.Close()
+	staleConnections := 0
 	var firstErr error
 	for _, itemID := range itemIDs {
-		if err := a.syncItem(ctx, itemID); err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("sync Item %s: %w", itemID, err)
+		if err := a.syncItem(ctx, itemID); err != nil {
+			if isPlaidItemNotFound(err) {
+				log.Printf("Plaid Item %s no longer exists; retaining local data until it is explicitly unlinked", itemID)
+				staleConnections++
+				continue
+			}
+			if firstErr == nil {
+				firstErr = fmt.Errorf("sync Item %s: %w", itemID, err)
+			}
 		}
 	}
-	return firstErr
+	warnings := make([]string, 0)
+	if staleConnections > 0 {
+		warnings = append(warnings, fmt.Sprintf(
+			"%d Plaid connection(s) are no longer available and were skipped. Their local data was kept; use Accounts to unlink them.",
+			staleConnections,
+		))
+	}
+	return warnings, firstErr
 }
 
 func (a *app) syncItem(ctx context.Context, itemID string) error {
@@ -758,7 +781,11 @@ func (a *app) syncItem(ctx context.Context, itemID string) error {
 	}
 	liabilities, err := a.plaid.liabilitiesGet(ctx, accessToken)
 	if err != nil {
-		log.Printf("Plaid credit statement data unavailable for Item %s (manual entry remains available): %v", itemID, err)
+		if isPlaidErrorCode(err, "ADDITIONAL_CONSENT_REQUIRED") {
+			log.Printf("Plaid credit statement data unavailable for Item %s: additional consent is required; transaction sync succeeded", itemID)
+		} else {
+			log.Printf("Plaid credit statement data unavailable for Item %s (manual entry remains available): %v", itemID, err)
+		}
 	} else if err := a.persistCreditStatements(ctx, liabilities); err != nil {
 		return fmt.Errorf("persist Plaid credit statements: %w", err)
 	}
@@ -859,7 +886,11 @@ func (a *app) runSyncWorker(ctx context.Context) {
 	if _, _, _, err := a.refreshOpenIncomeProjections(ctx); err != nil {
 		log.Printf("refresh income projections at startup: %v", err)
 	}
-	if err := a.syncAll(ctx); err != nil {
+	warnings, err := a.syncAll(ctx)
+	for _, warning := range warnings {
+		log.Printf("startup Plaid sync warning: %s", warning)
+	}
+	if err != nil {
 		log.Printf("startup Plaid sync: %v", err)
 	}
 	ticker := time.NewTicker(a.cfg.syncInterval)
@@ -872,7 +903,11 @@ func (a *app) runSyncWorker(ctx context.Context) {
 			if _, _, _, err := a.refreshOpenIncomeProjections(ctx); err != nil {
 				log.Printf("refresh scheduled income projections: %v", err)
 			}
-			if err := a.syncAll(ctx); err != nil {
+			warnings, err := a.syncAll(ctx)
+			for _, warning := range warnings {
+				log.Printf("scheduled Plaid sync warning: %s", warning)
+			}
+			if err != nil {
 				log.Printf("scheduled Plaid sync: %v", err)
 			}
 		}

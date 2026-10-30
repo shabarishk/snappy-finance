@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,25 @@ type plaidClient struct {
 	secret   string
 	baseURL  string
 	client   *http.Client
+}
+
+type plaidAPIError struct {
+	ErrorType string
+	ErrorCode string
+	Display   string
+}
+
+func (e *plaidAPIError) Error() string {
+	return fmt.Sprintf("Plaid %s: %s (%s)", e.ErrorType, e.ErrorCode, e.Display)
+}
+
+func isPlaidErrorCode(err error, code string) bool {
+	var plaidErr *plaidAPIError
+	return errors.As(err, &plaidErr) && plaidErr.ErrorCode == code
+}
+
+func isPlaidItemNotFound(err error) bool {
+	return isPlaidErrorCode(err, "ITEM_NOT_FOUND")
 }
 
 func newPlaidClient(cfg config) *plaidClient {
@@ -72,7 +92,11 @@ func (p *plaidClient) post(ctx context.Context, path string, input, output any) 
 			Display   string `json:"display_message"`
 		}
 		_ = json.Unmarshal(responseBody, &plaidError)
-		return fmt.Errorf("Plaid %s: %s (%s)", plaidError.ErrorType, plaidError.ErrorCode, plaidError.Display)
+		return &plaidAPIError{
+			ErrorType: plaidError.ErrorType,
+			ErrorCode: plaidError.ErrorCode,
+			Display:   plaidError.Display,
+		}
 	}
 	if err := json.Unmarshal(responseBody, output); err != nil {
 		return fmt.Errorf("decode Plaid response: %w", err)
@@ -183,13 +207,10 @@ func (p *plaidClient) transactionsSync(ctx context.Context, accessToken, cursor 
 
 func (p *plaidClient) removeItem(ctx context.Context, accessToken string) error {
 	var result struct {
-		Removed bool `json:"removed"`
+		RequestID string `json:"request_id"`
 	}
 	if err := p.post(ctx, "/item/remove", map[string]string{"access_token": accessToken}, &result); err != nil {
 		return err
-	}
-	if !result.Removed {
-		return fmt.Errorf("Plaid did not confirm Item removal")
 	}
 	return nil
 }

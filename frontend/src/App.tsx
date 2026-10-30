@@ -1564,9 +1564,9 @@ export default function App() {
     setError("");
     setNotice("");
     try {
-      await api("/api/plaid/sync", { method: "POST" });
-      setNotice("Sync complete.");
+      const result = await api<{ warnings: string[] }>("/api/plaid/sync", { method: "POST" });
       await refresh();
+      setNotice(result.warnings?.length ? result.warnings.join(" ") : "Sync complete.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sync failed");
     } finally {

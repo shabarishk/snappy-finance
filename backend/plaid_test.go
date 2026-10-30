@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestRemoveItemCallsPlaidAndRequiresConfirmation(t *testing.T) {
+func TestRemoveItemCallsPlaidAndAcceptsSuccessResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/item/remove" {
 			t.Errorf("Plaid path = %q, want /item/remove", r.URL.Path)
@@ -22,7 +22,7 @@ func TestRemoveItemCallsPlaidAndRequiresConfirmation(t *testing.T) {
 			t.Errorf("Plaid request credentials = %v, want configured client, secret, and access token", input)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"removed":true}`))
+		_, _ = w.Write([]byte(`{"request_id":"request-id"}`))
 	}))
 	defer server.Close()
 
@@ -37,10 +37,11 @@ func TestRemoveItemCallsPlaidAndRequiresConfirmation(t *testing.T) {
 	}
 }
 
-func TestRemoveItemRejectsUnconfirmedRemoval(t *testing.T) {
+func TestPlaidItemNotFoundIsRecognized(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"removed":false}`))
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error_type":"ITEM_ERROR","error_code":"ITEM_NOT_FOUND","display_message":"Item not found"}`))
 	}))
 	defer server.Close()
 
@@ -50,7 +51,8 @@ func TestRemoveItemRejectsUnconfirmedRemoval(t *testing.T) {
 		baseURL:  server.URL,
 		client:   server.Client(),
 	}
-	if err := client.removeItem(context.Background(), "access-token"); err == nil {
-		t.Fatal("removeItem succeeded without Plaid confirming the removal")
+	err := client.removeItem(context.Background(), "access-token")
+	if !isPlaidItemNotFound(err) {
+		t.Fatalf("isPlaidItemNotFound(%v) = false, want true", err)
 	}
 }
