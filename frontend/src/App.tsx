@@ -236,7 +236,6 @@ const liquidityChartColors = ["#198568", "#4a9b78", "#79b58e", "#a6c89e", "#d0d9
 
 function SpendingPieChart({
   month,
-  showForecast,
   canGoPrevious,
   canGoNext,
   onPrevious,
@@ -244,7 +243,6 @@ function SpendingPieChart({
   onCategoryClick,
 }: {
   month: LiquiditySpendMonth;
-  showForecast: boolean;
   canGoPrevious: boolean;
   canGoNext: boolean;
   onPrevious: () => void;
@@ -339,19 +337,17 @@ function SpendingPieChart({
           </ul>
         </div>
       ) : <div className="liquidity-empty">No expenses assigned to this spend month yet.</div>}
-      {showForecast && (
-        <dl className="liquidity-forecast">
-          <div><dt>Projected income</dt><dd>{month.projected_expendable_income === null ? "Incomplete" : money(month.projected_expendable_income)}</dd></div>
-          <div><dt>Scheduled expenses</dt><dd>−{money(month.scheduled_expense_total)}</dd></div>
-          <div><dt>Expenses incurred</dt><dd>−{money(total)}</dd></div>
-          <div className="liquidity-forecast-remaining">
-            <dt>Projected liquidity remaining</dt>
-            <dd className={projectedLiquidity === null ? "" : projectedLiquidity >= 0 ? "positive-text" : "negative-text"}>
-              {projectedLiquidity === null ? "Incomplete" : money(projectedLiquidity)}
-            </dd>
-          </div>
-        </dl>
-      )}
+      <dl className="liquidity-forecast">
+        <div><dt>Projected income</dt><dd>{month.projected_expendable_income === null ? "Incomplete" : money(month.projected_expendable_income)}</dd></div>
+        <div><dt>Scheduled expenses</dt><dd>−{money(month.scheduled_expense_total)}</dd></div>
+        <div><dt>Expenses incurred</dt><dd>−{money(total)}</dd></div>
+        <div className="liquidity-forecast-remaining">
+          <dt>Projected liquidity remaining</dt>
+          <dd className={projectedLiquidity === null ? "" : projectedLiquidity >= 0 ? "positive-text" : "negative-text"}>
+            {projectedLiquidity === null ? "Incomplete" : money(projectedLiquidity)}
+          </dd>
+        </div>
+      </dl>
     </article>
   );
 }
@@ -2650,7 +2646,6 @@ export default function App() {
                     <SpendingPieChart
                       key={liquidityMonth.spend_month}
                       month={{ ...liquidityMonth, scheduled_expense_total: scheduledExpenseTotal }}
-                      showForecast={monthIndex > 0}
                       canGoPrevious={monthIndex > 0}
                       canGoNext={monthIndex < dashboardLiquidity.months.length - 1}
                       onPrevious={() => setSelectedLiquidityMonthIndex((index) => Math.max(0, index - 1))}

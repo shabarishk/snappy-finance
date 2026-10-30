@@ -161,7 +161,7 @@ func (a *app) getDashboardLiquidity(w http.ResponseWriter, r *http.Request) {
 		if len(period.SpendMonthStart) < 7 {
 			continue
 		}
-		if index, found := targetMonths[period.SpendMonthStart[:7]]; found && index > 0 {
+		if index, found := targetMonths[period.SpendMonthStart[:7]]; found {
 			response.Months[index].ProjectedExpendableIncome = period.ProjectedExpendableIncome
 			response.Months[index].ScheduledExpenseTotal = period.ScheduledExpenseTotal
 		}
