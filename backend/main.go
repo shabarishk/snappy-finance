@@ -74,6 +74,9 @@ func main() {
 		db:    db,
 		plaid: newPlaidClient(cfg),
 	}
+	if err := a.matchInterAccountTransfers(ctx); err != nil {
+		log.Fatalf("match existing inter-account transfers: %v", err)
+	}
 	go a.runSyncWorker(ctx)
 
 	mux := http.NewServeMux()
@@ -522,6 +525,11 @@ func (a *app) updateTransactionCategory(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "could not update transaction category")
 		return
 	}
+	if err := a.matchInterAccountTransfers(r.Context()); err != nil {
+		log.Printf("refresh inter-account transfer matches after category update: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not update transaction category")
+		return
+	}
 	var result *string
 	if categoryID != "" {
 		result = &categoryID
@@ -648,6 +656,9 @@ func (a *app) syncItem(ctx context.Context, itemID string) error {
 	} else if err := a.persistCreditStatements(ctx, liabilities); err != nil {
 		return fmt.Errorf("persist Plaid credit statements: %w", err)
 	}
+	if err := a.matchInterAccountTransfers(ctx); err != nil {
+		return fmt.Errorf("match inter-account transfers: %w", err)
+	}
 	return nil
 }
 
@@ -713,7 +724,7 @@ func (a *app) persistTransactionPage(ctx context.Context, itemID string, result 
 					 FROM transaction_category_rules
 					 WHERE match_key = transaction_category_match_key($5, $4, $3, ($6::numeric < 0::numeric))
 					   AND category_type = CASE WHEN $6::numeric < 0::numeric THEN 'income' ELSE 'expense' END),
-					transaction_bank_category_mapping($10)
+					transaction_bank_category_mapping($10, $6)
 				)
 			)
 			ON CONFLICT (transaction_id) DO UPDATE SET

@@ -185,6 +185,25 @@ UPDATE transaction_categories
 SET label = 'Subscriptions/Streaming'
 WHERE category_id = 'streaming' AND label IS DISTINCT FROM 'Subscriptions/Streaming';
 
+CREATE TABLE IF NOT EXISTS app_schema_migrations (
+    migration_id TEXT PRIMARY KEY,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM app_schema_migrations
+        WHERE migration_id = 'exclude-inter-account-transfer-categories'
+    ) THEN
+        UPDATE transaction_categories
+        SET excluded_from_totals = TRUE
+        WHERE category_id IN ('transfer', 'transfer_expense');
+        INSERT INTO app_schema_migrations (migration_id)
+        VALUES ('exclude-inter-account-transfer-categories');
+    END IF;
+END $$;
+
 DROP FUNCTION IF EXISTS transaction_category_match_key(TEXT, TEXT);
 
 CREATE OR REPLACE FUNCTION transaction_category_match_key(
@@ -219,7 +238,9 @@ AS $$
     FROM normalized;
 $$;
 
-CREATE OR REPLACE FUNCTION transaction_bank_category_mapping(p_category_detailed TEXT)
+DROP FUNCTION IF EXISTS transaction_bank_category_mapping(TEXT);
+
+CREATE OR REPLACE FUNCTION transaction_bank_category_mapping(p_category_detailed TEXT, p_amount NUMERIC)
 RETURNS TEXT
 LANGUAGE SQL
 IMMUTABLE
@@ -231,6 +252,12 @@ AS $$
             'FOOD_AND_DRINK_RESTAURANT',
             'FOOD_AND_DRINK_COFFEE'
         ) THEN 'restaurants'
+        WHEN p_category_detailed IN (
+            'TRANSFER_IN_ACCOUNT_TRANSFER',
+            'TRANSFER_IN_SAVINGS',
+            'TRANSFER_OUT_ACCOUNT_TRANSFER',
+            'TRANSFER_OUT_SAVINGS'
+        ) THEN CASE WHEN p_amount < 0 THEN 'transfer' ELSE 'transfer_expense' END
     END;
 $$;
 
@@ -301,6 +328,7 @@ FROM transactions t
 JOIN transaction_categories c ON c.category_id = t.category_id
 WHERE t.category_match_key <> ''
   AND c.category_type = CASE WHEN t.amount < 0 THEN 'income' ELSE 'expense' END
+  AND c.category_id NOT IN ('transfer', 'transfer_expense')
 ORDER BY c.category_type, t.category_match_key, t.transaction_date DESC, t.updated_at DESC
 ON CONFLICT (category_type, match_key) DO NOTHING;
 
@@ -313,9 +341,9 @@ WHERE t.category_match_key = r.match_key
   AND t.category_id IS DISTINCT FROM r.category_id;
 
 UPDATE transactions t
-SET category_id = transaction_bank_category_mapping(t.category_detailed)
+SET category_id = transaction_bank_category_mapping(t.category_detailed, t.amount)
 WHERE t.category_rule_exempt = FALSE
-  AND transaction_bank_category_mapping(t.category_detailed) IS NOT NULL
+  AND transaction_bank_category_mapping(t.category_detailed, t.amount) IS NOT NULL
   AND NOT EXISTS (
       SELECT 1
       FROM transaction_category_rules r
@@ -327,6 +355,7 @@ CREATE INDEX IF NOT EXISTS transactions_date_idx ON transactions (transaction_da
 CREATE INDEX IF NOT EXISTS transactions_account_date_idx ON transactions (account_id, transaction_date DESC);
 CREATE INDEX IF NOT EXISTS transactions_category_idx ON transactions (category_id);
 CREATE INDEX IF NOT EXISTS transactions_category_match_key_idx ON transactions (category_match_key);
+CREATE INDEX IF NOT EXISTS transactions_transfer_amount_date_idx ON transactions (amount, transaction_date);
 
 CREATE TABLE IF NOT EXISTS subscription_payment_history (
     history_id BIGSERIAL PRIMARY KEY,

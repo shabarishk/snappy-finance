@@ -8,6 +8,7 @@ A self-hosted personal finance app scaffold using Go, React, PostgreSQL, and Pla
 - Shared household financial data, profile-specific dashboard card preferences, and admin-only Plaid/profile management.
 - Administrators can hide selected transactions from household users while retaining access to them.
 - Administrators can categorize expense transactions separately from income and transfer transactions, and exclude categories from monthly spending or income totals.
+- Opposite-sign transactions on different accounts are automatically categorized as inter-account transfers when their amounts match to the cent, dates are within three days, and Plaid data or transaction descriptions indicate a transfer. Transfer categories are excluded from totals by default, and administrator category choices take precedence.
 - Transportation/Mobility is available as an expense category. When categorizing a transaction with a stable automated match, administrators can apply the category to that item only or to all related past and future matches.
 - Gaming is available as an expense category, and Plaid food-and-drink categories for other food and drink, fast food, restaurants, and coffee are mapped to Restaurants unless a transaction-specific or merchant rule overrides the bank category.
 - The dashboard's first summary card defaults to expendable income, based on transactions assigned the Expendable income category, and can be toggled to total income.
