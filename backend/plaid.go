@@ -180,3 +180,16 @@ func (p *plaidClient) transactionsSync(ctx context.Context, accessToken, cursor 
 	err := p.post(ctx, "/transactions/sync", input, &result)
 	return result, err
 }
+
+func (p *plaidClient) removeItem(ctx context.Context, accessToken string) error {
+	var result struct {
+		Removed bool `json:"removed"`
+	}
+	if err := p.post(ctx, "/item/remove", map[string]string{"access_token": accessToken}, &result); err != nil {
+		return err
+	}
+	if !result.Removed {
+		return fmt.Errorf("Plaid did not confirm Item removal")
+	}
+	return nil
+}

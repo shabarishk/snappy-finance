@@ -304,6 +304,13 @@ button { cursor: pointer; }
 .liquidity-transactions-list li strong { color: #52615a; font-size: 11px; overflow-wrap: anywhere; }
 .liquidity-transactions-list li span { color: var(--muted); font-size: 10px; }
 .liquidity-transactions-list li > strong { flex: 0 0 auto; white-space: nowrap; }
+.account-connections { padding: 0 22px; }
+.account-connection + .account-connection { border-top: 1px solid var(--line); }
+.account-connection-heading { align-items: center; display: flex; gap: 12px; justify-content: space-between; padding: 16px 0 8px; }
+.account-connection-heading > div { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.account-connection-heading h3 { color: #34463e; font-size: 12px; margin: 0; }
+.account-connection-heading span { color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+.account-connection-heading .secondary-button { flex: 0 0 auto; min-height: 34px; padding: 0 10px; }
 .account-group + .account-group { border-top: 1px solid var(--line); }
 .account-group-heading { align-items: center; color: #52615a; display: flex; justify-content: space-between; padding: 15px 0 4px; }
 .account-group-heading h3 { font-size: 11px; font-weight: 600; margin: 0; }
@@ -311,6 +318,9 @@ button { cursor: pointer; }
 .account-group-empty { color: var(--muted); font-size: 10px; padding: 10px 0 15px; }
 .account-row, .transaction-row { align-items: center; border-bottom: 1px solid #f0f2f0; display: flex; min-height: 68px; }
 .account-row:last-child, .transaction-row:last-child { border-bottom: 0; }
+.account-row { gap: 12px; }
+.account-actions { display: flex; flex: 0 0 auto; }
+.account-actions .secondary-button { min-height: 35px; padding: 0 10px; }
 .account-icon, .transaction-icon { align-items: center; background: #f2f7f3; border-radius: 9px; color: #4f8e70; display: inline-flex; flex: 0 0 36px; height: 36px; justify-content: center; margin-right: 12px; }
 .account-info, .transaction-info { display: flex; flex: 1; flex-direction: column; gap: 5px; }
 .account-info strong, .transaction-info strong, .account-balance, .transaction-row > strong { font-size: 12px; font-weight: 600; }
@@ -394,11 +404,15 @@ footer { color: #9aa39e; font-size: 10px; padding: 6px 0 16px; }
   .statistics-period-options { width: 100%; }
   .statistics-period-option { flex: 1 1 0; }
   .projection-rate-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .account-row { column-gap: 10px; display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; padding: 12px 0; }
+  .account-row { column-gap: 10px; display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; padding: 12px 0; row-gap: 8px; }
   .account-icon { margin: 0; }
   .account-info { min-width: 0; }
   .account-info strong, .account-info span { overflow-wrap: anywhere; }
   .account-balance { font-size: 11px; text-align: right; white-space: nowrap; }
+  .account-actions { grid-column: 2 / 4; justify-content: flex-end; }
+  .account-connection-heading { align-items: flex-start; }
+  .account-connections { padding-left: 15px; padding-right: 15px; }
+  .account-sync-help { padding-left: 15px; padding-right: 15px; }
   .transaction-row { column-gap: 9px; display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; min-height: 72px; padding: 12px 0; row-gap: 4px; }
   .transaction-icon { grid-column: 1; grid-row: 1 / span 2; margin: 0; }
   .transaction-info { grid-column: 2; grid-row: 1 / span 2; min-width: 0; }

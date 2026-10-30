@@ -153,6 +153,7 @@ type ProjectionData = {
 
 type Account = {
   account_id: string;
+  item_id: string;
   name: string;
   official_name: string | null;
   mask: string | null;
@@ -163,6 +164,7 @@ type Account = {
   demo_data: boolean;
   statement_close_day: number | null;
   statement_due_day: number | null;
+  last_synced_at: string | null;
 };
 
 const accountCategories = [
@@ -432,7 +434,8 @@ function displayDate(date: string, options: Intl.DateTimeFormatOptions = { month
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [activePage, setActivePage] = useState<"overview" | "administration" | "transactions" | "projections">(() => {
+  const [activePage, setActivePage] = useState<"overview" | "accounts" | "administration" | "transactions" | "projections">(() => {
+    if (window.location.hash === "#accounts") return "accounts";
     if (window.location.hash === "#administration") return "administration";
     if (window.location.hash === "#transactions") return "transactions";
     if (window.location.hash === "#projections") return "projections";
@@ -501,13 +504,16 @@ export default function App() {
   const [scheduledExpenseDrafts, setScheduledExpenseDrafts] = useState<ScheduledExpenseDraft[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [syncingConnectionID, setSyncingConnectionID] = useState<string | null>(null);
+  const [unlinkingConnectionID, setUnlinkingConnectionID] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const monthPickerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const syncPageFromHash = () => {
-      if (window.location.hash === "#administration") setActivePage("administration");
+      if (window.location.hash === "#accounts") setActivePage("accounts");
+      else if (window.location.hash === "#administration") setActivePage("administration");
       else if (window.location.hash === "#transactions") setActivePage("transactions");
       else if (window.location.hash === "#projections") setActivePage("projections");
       else setActivePage("overview");
@@ -580,7 +586,7 @@ export default function App() {
     };
   }, [dashboardPreferencesOpen, liquidityTransactionsDialog, pendingCategoryChange, projectionAssumptionsOpen, scheduledExpensesOpen, sidebarOpen, transactionFiltersOpen]);
 
-  function navigateToPage(page: "overview" | "administration" | "transactions" | "projections") {
+  function navigateToPage(page: "overview" | "accounts" | "administration" | "transactions" | "projections") {
     setActivePage(page);
     setSidebarOpen(false);
     setDashboardPreferencesOpen(false);
@@ -804,16 +810,30 @@ export default function App() {
     return { spent, income, expendableIncome, net: income - spent };
   }, [transactions, transactionCategories, statisticsRange]);
 
-  const accountGroups = useMemo(() => {
-    const groups = accountCategories.map(({ type, label }) => ({
-      label,
-      accounts: accounts.filter((account) => account.type.toLowerCase() === type),
-    }));
-    const otherAccounts = accounts.filter(
-      (account) => !accountCategories.some(({ type }) => account.type.toLowerCase() === type),
-    );
-    if (otherAccounts.length > 0) groups.push({ label: "Other accounts", accounts: otherAccounts });
-    return groups;
+  const accountConnections = useMemo(() => {
+    const accountsByConnection = new Map<string, Account[]>();
+    for (const account of accounts) {
+      const connectedAccounts = accountsByConnection.get(account.item_id) ?? [];
+      connectedAccounts.push(account);
+      accountsByConnection.set(account.item_id, connectedAccounts);
+    }
+    return Array.from(accountsByConnection, ([itemID, connectedAccounts]) => {
+      const groups = accountCategories.map(({ type, label }) => ({
+        label,
+        accounts: connectedAccounts.filter((account) => account.type.toLowerCase() === type),
+      })).filter((group) => group.accounts.length > 0);
+      const otherAccounts = connectedAccounts.filter(
+        (account) => !accountCategories.some(({ type }) => account.type.toLowerCase() === type),
+      );
+      if (otherAccounts.length > 0) groups.push({ label: "Other accounts", accounts: otherAccounts });
+      return {
+        itemID,
+        accounts: connectedAccounts,
+        groups,
+        demoData: connectedAccounts[0]?.demo_data ?? false,
+        lastSyncedAt: connectedAccounts[0]?.last_synced_at ?? null,
+      };
+    });
   }, [accounts]);
   const cashAccounts = useMemo(
     () => accounts.filter((account) => account.type.toLowerCase() === "depository"),
@@ -873,9 +893,12 @@ export default function App() {
 
   const pageTitle = activePage === "administration"
     ? "Administration"
-    : activePage === "transactions" ? "Transactions"
-      : activePage === "projections" ? "Projections" : "Overview";
-  const pageEyebrow = activePage === "administration"
+    : activePage === "accounts" ? "Accounts"
+      : activePage === "transactions" ? "Transactions"
+        : activePage === "projections" ? "Projections" : "Overview";
+  const pageEyebrow = activePage === "accounts"
+    ? "CONNECTED ACCOUNTS"
+    : activePage === "administration"
     ? "ADMINISTRATION"
     : activePage === "projections" ? "INCOME FORECAST" : "YOUR FINANCES";
   const currentSpendMonth = getCurrentSpendMonth();
@@ -1551,6 +1574,49 @@ export default function App() {
     }
   }
 
+  async function syncAccount(account: Account) {
+    setSyncingConnectionID(account.item_id);
+    setError("");
+    setNotice("");
+    try {
+      await api(`/api/plaid/accounts/${encodeURIComponent(account.account_id)}/sync`, { method: "POST" });
+      await refresh();
+      setNotice(`Transactions for the ${account.official_name || account.name} Plaid connection were refreshed.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not sync this account");
+    } finally {
+      setSyncingConnectionID(null);
+    }
+  }
+
+  async function unlinkAccountConnection(connection: (typeof accountConnections)[number]) {
+    const accountNames = connection.accounts.map((account) => account.official_name || account.name).join(", ");
+    const confirmed = window.confirm(
+      `Unlink this Plaid connection? This will remove ${connection.accounts.length} linked account${connection.accounts.length === 1 ? "" : "s"} (${accountNames}) and their synced transactions and statements from Snappy Finance. Scheduled payments will remain but be detached from these accounts.`,
+    );
+    if (!confirmed) return;
+
+    setUnlinkingConnectionID(connection.itemID);
+    setError("");
+    setNotice("");
+    try {
+      const result = await api<{ accounts_removed: number }>(
+        `/api/plaid/accounts/${encodeURIComponent(connection.accounts[0].account_id)}`,
+        { method: "DELETE" },
+      );
+      setSelectedTransactionAccountIDs(null);
+      setFinanceSettings(null);
+      setExpendableAccountSelection("");
+      setStatementAccountSelection("");
+      await refresh();
+      setNotice(`Plaid connection unlinked. ${result.accounts_removed} account${result.accounts_removed === 1 ? "" : "s"} removed.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not unlink this Plaid connection");
+    } finally {
+      setUnlinkingConnectionID(null);
+    }
+  }
+
   async function signOut() {
     try {
       await api("/api/auth/logout", { method: "POST" });
@@ -1955,6 +2021,73 @@ export default function App() {
     </details>
   );
 
+  const accountsPanel = (
+    <section className="panel settings-panel accounts-panel">
+      <div className="panel-heading">
+        <div><h2>Connected accounts</h2><p>Balances and transaction access from your linked Plaid connections.</p></div>
+      </div>
+      {loading ? <div className="empty-state">Loading accounts…</div> : accountConnections.length === 0 ? (
+        <div className="empty-state">
+          <span className="empty-icon"><Landmark size={22} /></span>
+          <strong>No accounts connected yet</strong>
+          <span>{profile?.role === "admin" ? "Connect a bank to see balances and transactions." : "Ask your household administrator to connect a bank account."}</span>
+        </div>
+      ) : (
+        <>
+          <p className="finance-help account-sync-help">Plaid syncs transactions per connection. Syncing an account refreshes all accounts in that connection. Unlinking removes the connection and its synced data.</p>
+          <div className="account-connections">
+            {accountConnections.map((connection) => (
+              <section className="account-connection" key={connection.itemID}>
+                <header className="account-connection-heading">
+                  <div>
+                    <h3>Plaid connection</h3>
+                    <span>{connection.accounts.length} linked account{connection.accounts.length === 1 ? "" : "s"} · {connection.lastSyncedAt ? `Last synced ${new Date(connection.lastSyncedAt).toLocaleString()}` : "Not synced yet"}{connection.demoData ? " · DEMO" : ""}</span>
+                  </div>
+                  {profile?.role === "admin" && !connection.demoData && (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={busy || syncingConnectionID === connection.itemID || unlinkingConnectionID === connection.itemID}
+                      onClick={() => void unlinkAccountConnection(connection)}
+                    >{unlinkingConnectionID === connection.itemID ? "Unlinking…" : "Unlink connection"}</button>
+                  )}
+                </header>
+                {connection.groups.map((group) => (
+                  <section className="account-group" key={group.label}>
+                    <div className="account-group-heading">
+                      <h3>{group.label}</h3>
+                      <span>{group.accounts.length}</span>
+                    </div>
+                    {group.accounts.map((account) => {
+                      const syncing = syncingConnectionID === account.item_id;
+                      return (
+                        <div className="account-row" key={account.account_id}>
+                          <span className="account-icon"><Landmark size={18} /></span>
+                          <div className="account-info"><strong>{account.official_name || account.name}</strong><span>{account.type}{account.subtype ? ` · ${account.subtype}` : ""}{account.mask ? ` ···· ${account.mask}` : ""}{account.demo_data ? " · DEMO" : ""}</span></div>
+                          <strong className="account-balance">{money(account.current_balance, account.iso_currency_code)}</strong>
+                          {profile?.role === "admin" && !account.demo_data && (
+                            <div className="account-actions">
+                              <button
+                                type="button"
+                                className="secondary-button"
+                                disabled={busy || syncing || unlinkingConnectionID === account.item_id}
+                                onClick={() => void syncAccount(account)}
+                              ><RefreshCw size={14} className={syncing ? "spin" : ""} /> {syncing ? "Syncing" : "Sync transactions"}</button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </section>
+                ))}
+              </section>
+            ))}
+          </div>
+        </>
+      )}
+    </section>
+  );
+
   if (authenticated === null) {
     return <main className="loading-screen">Loading your workspace…</main>;
   }
@@ -2003,6 +2136,11 @@ export default function App() {
             onClick={() => navigateToPage("overview")}
             aria-current={activePage === "overview" ? "page" : undefined}
           ><Banknote size={18} /> Overview</button>
+          <button
+            className={`nav-item ${activePage === "accounts" ? "active" : ""}`}
+            onClick={() => navigateToPage("accounts")}
+            aria-current={activePage === "accounts" ? "page" : undefined}
+          ><Landmark size={18} /> Accounts</button>
           <button
             className={`nav-item ${activePage === "projections" ? "active" : ""}`}
             onClick={() => navigateToPage("projections")}
@@ -2120,10 +2258,12 @@ export default function App() {
                 <Filter size={16} /> Filters
               </button>
             )}
-            {activePage === "overview" && profile?.role === "admin" && <>
+            {(activePage === "overview" || activePage === "accounts") && profile?.role === "admin" && <>
               <button className="secondary-button" onClick={() => void syncNow()} disabled={busy || !accounts.some((account) => !account.demo_data)}>
                 <RefreshCw size={16} className={busy ? "spin" : ""} /> Sync
               </button>
+            </>}
+            {activePage === "accounts" && profile?.role === "admin" && <>
               <button className="primary-button" onClick={() => void connectAccount()} disabled={busy}>
                 <span>+</span> Connect account
               </button>
@@ -2473,6 +2613,8 @@ export default function App() {
               </section>
             </aside>
           </>
+        ) : activePage === "accounts" ? (
+          accountsPanel
         ) : activePage === "projections" ? (
           projectionsPanel
         ) : (
@@ -2751,38 +2893,6 @@ export default function App() {
                     </li>
                   ))}
               </ul>
-            </div>
-          )}
-        </section>
-
-        <section className="panel" id="accounts">
-          <div className="panel-heading"><div><h2>Accounts</h2><p>Balances from your connected institutions</p></div></div>
-          {loading ? <div className="empty-state">Loading accounts…</div> : accounts.length === 0 ? (
-            <div className="empty-state">
-              <span className="empty-icon"><Landmark size={22} /></span>
-              <strong>No accounts connected yet</strong>
-              <span>{profile?.role === "admin" ? "Connect a bank to see your balances and transactions." : "Ask your household administrator to connect a bank account."}</span>
-              {profile?.role === "admin" && <button className="primary-button" onClick={() => void connectAccount()} disabled={busy}>Connect your first account</button>}
-            </div>
-          ) : (
-            <div className="account-list">
-              {accountGroups.map((group) => (
-                <section className="account-group" key={group.label}>
-                  <div className="account-group-heading">
-                    <h3>{group.label}</h3>
-                    <span>{group.accounts.length}</span>
-                  </div>
-                  {group.accounts.length === 0 ? (
-                    <div className="account-group-empty">No {group.label.toLowerCase()} connected.</div>
-                  ) : group.accounts.map((account) => (
-                    <div className="account-row" key={account.account_id}>
-                      <span className="account-icon"><Landmark size={18} /></span>
-                      <div className="account-info"><strong>{account.official_name || account.name}</strong><span>{account.type}{account.subtype ? ` · ${account.subtype}` : ""}{account.mask ? ` ···· ${account.mask}` : ""}{account.demo_data ? " · DEMO" : ""}</span></div>
-                      <strong className="account-balance">{money(account.current_balance, account.iso_currency_code)}</strong>
-                    </div>
-                  ))}
-                </section>
-              ))}
             </div>
           )}
         </section>

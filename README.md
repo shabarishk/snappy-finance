@@ -28,6 +28,7 @@ A self-hosted personal finance app scaffold using Go, React, PostgreSQL, and Pla
 - Dashboard filters and summary-card preferences open in a slide-in drawer from the right.
 - Applying a category to related items creates a reusable rule that updates similar existing transactions and applies to future syncs; applying it to one item leaves the rule and other transactions unchanged. Expense rules match the normalized first three merchant/description words; income rules match the normalized first three transaction-name words on the same account.
 - The Administration page separates user management and financial management into tabs.
+- The Accounts page on the sidebar lists linked accounts by Plaid connection, with connection-wide sync, per-account sync actions, and administrator unlink controls. Plaid sync and unlink operate on a whole connection, so unlinking removes all its accounts and synced data.
 - Plaid Link token creation and public-token exchange.
 - AES-GCM encryption of stored Plaid access tokens.
 - Cursor-based Plaid Transactions Sync with added, modified, and removed transaction handling.

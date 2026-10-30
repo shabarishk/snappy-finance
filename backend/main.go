@@ -14,6 +14,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -36,9 +37,10 @@ type config struct {
 }
 
 type app struct {
-	cfg   config
-	db    *pgxpool.Pool
-	plaid *plaidClient
+	cfg    config
+	db     *pgxpool.Pool
+	plaid  *plaidClient
+	syncMu sync.Mutex
 }
 
 func main() {
@@ -105,6 +107,8 @@ func main() {
 	mux.Handle("POST /api/plaid/link-token", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.createLinkToken))))
 	mux.Handle("POST /api/plaid/exchange", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.exchangePublicToken))))
 	mux.Handle("POST /api/plaid/sync", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.syncNow))))
+	mux.Handle("POST /api/plaid/accounts/{accountID}/sync", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.syncAccount))))
+	mux.Handle("DELETE /api/plaid/accounts/{accountID}", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.unlinkAccount))))
 	mux.Handle("GET /api/accounts", a.requireAuth(http.HandlerFunc(a.listAccounts)))
 	mux.Handle("GET /api/transactions", a.requireAuth(http.HandlerFunc(a.listTransactions)))
 	mux.Handle("PATCH /api/admin/transactions/visibility", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.updateTransactionVisibility))))
@@ -263,11 +267,110 @@ func (a *app) syncNow(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"synced": true})
 }
 
+func (a *app) syncAccount(w http.ResponseWriter, r *http.Request) {
+	accountID := r.PathValue("accountID")
+	var itemID string
+	var demoData bool
+	err := a.db.QueryRow(r.Context(), `
+		SELECT accounts.item_id, plaid_items.demo_data
+		FROM accounts
+		JOIN plaid_items USING (item_id)
+		WHERE accounts.account_id = $1`, accountID).Scan(&itemID, &demoData)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "account not found")
+		return
+	}
+	if err != nil {
+		log.Printf("load account connection for sync: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not sync account")
+		return
+	}
+	if demoData {
+		writeError(w, http.StatusBadRequest, "demo accounts cannot be synced")
+		return
+	}
+	if err := a.syncItem(r.Context(), itemID); err != nil {
+		log.Printf("sync Plaid account %s: %v", accountID, err)
+		writeError(w, http.StatusBadGateway, "account connection sync failed; check the API logs")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"synced": true})
+}
+
+func (a *app) unlinkAccount(w http.ResponseWriter, r *http.Request) {
+	if !a.plaid.configured() {
+		writeError(w, http.StatusServiceUnavailable, "Plaid credentials are not configured")
+		return
+	}
+
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+
+	var itemID string
+	var encrypted []byte
+	var demoData bool
+	var accountCount int
+	err := a.db.QueryRow(r.Context(), `
+		SELECT item.item_id, item.access_token_encrypted, item.demo_data,
+		       (SELECT COUNT(*) FROM accounts linked WHERE linked.item_id = item.item_id)
+		FROM accounts requested
+		JOIN plaid_items item USING (item_id)
+		WHERE requested.account_id = $1`, r.PathValue("accountID")).Scan(&itemID, &encrypted, &demoData, &accountCount)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "account not found")
+		return
+	}
+	if err != nil {
+		log.Printf("load Plaid connection for unlink: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not unlink account")
+		return
+	}
+	if demoData {
+		writeError(w, http.StatusBadRequest, "demo connections cannot be unlinked")
+		return
+	}
+	accessToken, err := decrypt(a.cfg.encryptionKey, encrypted)
+	if err != nil {
+		log.Printf("decrypt Plaid access token for unlink: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not unlink account")
+		return
+	}
+	if err := a.plaid.removeItem(r.Context(), accessToken); err != nil {
+		log.Printf("remove Plaid Item %s: %v", itemID, err)
+		writeError(w, http.StatusBadGateway, "Plaid could not unlink this connection")
+		return
+	}
+
+	tx, err := a.db.Begin(r.Context())
+	if err != nil {
+		log.Printf("begin Plaid unlink: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not unlink account")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	tag, err := tx.Exec(r.Context(), "DELETE FROM plaid_items WHERE item_id = $1 AND demo_data = FALSE", itemID)
+	if err != nil {
+		log.Printf("delete unlinked Plaid Item: %v", err)
+		writeError(w, http.StatusInternalServerError, "Plaid unlinked the connection but local account data could not be removed")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "account connection was already removed")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		log.Printf("commit Plaid unlink: %v", err)
+		writeError(w, http.StatusInternalServerError, "Plaid unlinked the connection but local account data could not be removed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"unlinked": true, "accounts_removed": accountCount})
+}
+
 func (a *app) listAccounts(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.db.Query(r.Context(), `
 		SELECT accounts.account_id, accounts.name, accounts.official_name, accounts.mask, accounts.type,
 		       accounts.subtype, accounts.current_balance, accounts.iso_currency_code, plaid_items.demo_data,
-		       cycle.statement_close_day, cycle.statement_due_day
+		       cycle.statement_close_day, cycle.statement_due_day, accounts.item_id, plaid_items.last_synced_at
 		FROM accounts
 		JOIN plaid_items USING (item_id)
 		LEFT JOIN credit_card_cycles cycle USING (account_id)
@@ -281,7 +384,7 @@ func (a *app) listAccounts(w http.ResponseWriter, r *http.Request) {
 	accounts := make([]account, 0)
 	for rows.Next() {
 		var item account
-		if err := rows.Scan(&item.AccountID, &item.Name, &item.OfficialName, &item.Mask, &item.Type, &item.Subtype, &item.CurrentBalance, &item.Currency, &item.DemoData, &item.StatementCloseDay, &item.StatementDueDay); err != nil {
+		if err := rows.Scan(&item.AccountID, &item.Name, &item.OfficialName, &item.Mask, &item.Type, &item.Subtype, &item.CurrentBalance, &item.Currency, &item.DemoData, &item.StatementCloseDay, &item.StatementDueDay, &item.ItemID, &item.LastSyncedAt); err != nil {
 			log.Printf("scan account row: %v", err)
 			writeError(w, http.StatusInternalServerError, "could not load accounts")
 			return
@@ -622,6 +725,9 @@ func (a *app) syncAll(ctx context.Context) error {
 }
 
 func (a *app) syncItem(ctx context.Context, itemID string) error {
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+
 	var encrypted []byte
 	var cursor string
 	err := a.db.QueryRow(ctx, "SELECT access_token_encrypted, cursor FROM plaid_items WHERE item_id=$1", itemID).Scan(&encrypted, &cursor)
@@ -774,17 +880,19 @@ func (a *app) runSyncWorker(ctx context.Context) {
 }
 
 type account struct {
-	AccountID         string   `json:"account_id"`
-	Name              string   `json:"name"`
-	OfficialName      *string  `json:"official_name"`
-	Mask              *string  `json:"mask"`
-	Type              string   `json:"type"`
-	Subtype           string   `json:"subtype"`
-	CurrentBalance    *float64 `json:"current_balance"`
-	Currency          *string  `json:"iso_currency_code"`
-	DemoData          bool     `json:"demo_data"`
-	StatementCloseDay *int16   `json:"statement_close_day"`
-	StatementDueDay   *int16   `json:"statement_due_day"`
+	AccountID         string     `json:"account_id"`
+	ItemID            string     `json:"item_id"`
+	Name              string     `json:"name"`
+	OfficialName      *string    `json:"official_name"`
+	Mask              *string    `json:"mask"`
+	Type              string     `json:"type"`
+	Subtype           string     `json:"subtype"`
+	CurrentBalance    *float64   `json:"current_balance"`
+	Currency          *string    `json:"iso_currency_code"`
+	DemoData          bool       `json:"demo_data"`
+	StatementCloseDay *int16     `json:"statement_close_day"`
+	StatementDueDay   *int16     `json:"statement_due_day"`
+	LastSyncedAt      *time.Time `json:"last_synced_at"`
 }
 
 type transaction struct {
