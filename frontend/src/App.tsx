@@ -1967,7 +1967,7 @@ export default function App() {
     return (
       <main className="login-screen">
         <form className="login-card" onSubmit={signIn}>
-          <div className="brand-mark"><Wallet size={21} /></div>
+          <img className="brand-mark" src="/app-icon.svg" alt="" />
           <p className="eyebrow">SNAPPY FINANCE</p>
           <h1>Your money, in focus.</h1>
           <p className="muted">Sign in to your private finance dashboard.</p>
@@ -1999,7 +1999,7 @@ export default function App() {
   return (
     <main className="app-shell">
       <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`} id="app-sidebar">
-        <div className="brand"><span className="brand-mark"><Wallet size={19} /></span><span>snappy<span className="brand-light">finance</span></span></div>
+        <div className="brand"><img className="brand-mark" src="/app-icon.svg" alt="" /><span>snappy<span className="brand-light">finance</span></span></div>
         <nav className="sidebar-nav" aria-label="Workspace">
           <div className="nav-label">WORKSPACE</div>
           <button
@@ -2033,7 +2033,7 @@ export default function App() {
         </div>
       </aside>
       <div className="mobile-topbar" aria-hidden="true">
-        <div className="brand"><span className="brand-mark"><Wallet size={19} /></span><span>snappy<span className="brand-light">finance</span></span></div>
+        <div className="brand"><img className="brand-mark" src="/app-icon.svg" alt="" /><span>snappy<span className="brand-light">finance</span></span></div>
       </div>
       <button
         type="button"
