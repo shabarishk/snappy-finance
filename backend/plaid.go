@@ -19,13 +19,26 @@ type plaidClient struct {
 }
 
 type plaidAPIError struct {
-	ErrorType string
-	ErrorCode string
-	Display   string
+	ErrorType    string
+	ErrorCode    string
+	ErrorMessage string
+	Display      string
+	RequestID    string
 }
 
 func (e *plaidAPIError) Error() string {
-	return fmt.Sprintf("Plaid %s: %s (%s)", e.ErrorType, e.ErrorCode, e.Display)
+	message := fmt.Sprintf("Plaid %s: %s", e.ErrorType, e.ErrorCode)
+	details := e.ErrorMessage
+	if details == "" {
+		details = e.Display
+	}
+	if details != "" {
+		message += ": " + details
+	}
+	if e.RequestID != "" {
+		message += fmt.Sprintf(" (request_id=%s)", e.RequestID)
+	}
+	return message
 }
 
 func isPlaidErrorCode(err error, code string) bool {
@@ -87,15 +100,19 @@ func (p *plaidClient) post(ctx context.Context, path string, input, output any) 
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		var plaidError struct {
-			ErrorCode string `json:"error_code"`
-			ErrorType string `json:"error_type"`
-			Display   string `json:"display_message"`
+			ErrorCode    string `json:"error_code"`
+			ErrorType    string `json:"error_type"`
+			ErrorMessage string `json:"error_message"`
+			Display      string `json:"display_message"`
+			RequestID    string `json:"request_id"`
 		}
 		_ = json.Unmarshal(responseBody, &plaidError)
 		return &plaidAPIError{
-			ErrorType: plaidError.ErrorType,
-			ErrorCode: plaidError.ErrorCode,
-			Display:   plaidError.Display,
+			ErrorType:    plaidError.ErrorType,
+			ErrorCode:    plaidError.ErrorCode,
+			ErrorMessage: plaidError.ErrorMessage,
+			Display:      plaidError.Display,
+			RequestID:    plaidError.RequestID,
 		}
 	}
 	if err := json.Unmarshal(responseBody, output); err != nil {

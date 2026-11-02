@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -78,6 +79,37 @@ func TestCreateLiabilitiesUpdateLinkTokenRequestsConsentForExistingItem(t *testi
 	}
 	if token != "update-link-token" {
 		t.Fatalf("link token = %q, want update-link-token", token)
+	}
+}
+
+func TestPlaidAPIErrorIncludesDiagnosticMessageAndRequestID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error_type":"INVALID_REQUEST","error_code":"INVALID_FIELD","error_message":"additional_consented_products is not supported for this Item","request_id":"plaid-request-id"}`))
+	}))
+	defer server.Close()
+
+	client := &plaidClient{
+		clientID: "client",
+		secret:   "secret",
+		baseURL:  server.URL,
+		client:   server.Client(),
+	}
+	_, err := client.createLiabilitiesUpdateLinkToken(context.Background(), "existing-access-token")
+	if err == nil {
+		t.Fatal("createLiabilitiesUpdateLinkToken succeeded, want Plaid error")
+	}
+
+	for _, diagnostic := range []string{
+		"INVALID_REQUEST",
+		"INVALID_FIELD",
+		"additional_consented_products is not supported for this Item",
+		"plaid-request-id",
+	} {
+		if !strings.Contains(err.Error(), diagnostic) {
+			t.Errorf("error %q does not include diagnostic %q", err, diagnostic)
+		}
 	}
 }
 
