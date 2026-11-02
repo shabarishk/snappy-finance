@@ -83,6 +83,7 @@ type ScheduledExpense = {
   frequency: ScheduledExpenseFrequency;
   first_due_date: string;
   merchant_name: string;
+  merchant_names: string[];
   account_id: string | null;
   tracking_mode: "fixed" | "variable";
 };
@@ -94,7 +95,7 @@ type ScheduledExpenseDraft = {
   amount: string;
   frequency: ScheduledExpenseFrequency;
   first_due_date: string;
-  merchant_name: string;
+  merchant_names_text: string;
   account_id: string;
   tracking_mode: "fixed" | "variable";
 };
@@ -103,6 +104,7 @@ type SubscriptionTrackerPayment = {
   expense_id: number;
   name: string;
   merchant_name: string;
+  merchant_names?: string[];
   account_name: string;
   due_date: string;
   amount: number;
@@ -784,7 +786,9 @@ export default function App() {
           amount: expense.amount.toString(),
           frequency: expense.frequency,
           first_due_date: expense.first_due_date.slice(0, 10),
-          merchant_name: expense.merchant_name ?? "",
+          merchant_names_text: (expense.merchant_names?.length
+            ? expense.merchant_names
+            : expense.merchant_name ? [expense.merchant_name] : []).join("\n"),
           account_id: expense.account_id ?? "",
           tracking_mode: expense.tracking_mode ?? "fixed",
         })));
@@ -1332,7 +1336,7 @@ export default function App() {
         amount: "",
         frequency: "monthly",
         first_due_date: transactionDateKey(new Date()),
-        merchant_name: "",
+        merchant_names_text: "",
         account_id: "",
         tracking_mode: "fixed",
       },
@@ -1347,8 +1351,13 @@ export default function App() {
     for (const expense of scheduledExpenseDrafts) {
       const name = expense.name.trim();
       const amount = Number(expense.amount);
+      const merchantNames = expense.merchant_names_text.split(/\r?\n/).map((merchantName) => merchantName.trim()).filter(Boolean);
       if (!name || name.length > 100 || !expense.first_due_date || !Number.isFinite(amount) || amount < 0) {
         setError("Enter a category, valid non-negative amount, and first due date for every scheduled expense.");
+        return;
+      }
+      if (merchantNames.length > 20 || merchantNames.some((merchantName) => merchantName.length > 100)) {
+        setError("Enter no more than 20 merchant names, each 100 characters or fewer.");
         return;
       }
       expenses.push({
@@ -1357,7 +1366,8 @@ export default function App() {
         amount,
         frequency: expense.frequency,
         first_due_date: expense.first_due_date,
-        merchant_name: expense.merchant_name.trim(),
+        merchant_name: merchantNames[0] ?? "",
+        merchant_names: merchantNames,
         account_id: expense.account_id || null,
         tracking_mode: expense.tracking_mode,
       });
@@ -1892,14 +1902,15 @@ export default function App() {
                               <option value="annual">Annual</option>
                             </select>
                           </label>
-                          <label>Merchant name
-                            <input
-                              type="text"
-                              maxLength={100}
-                              placeholder="e.g. Northstar Electric"
-                              value={expense.merchant_name}
-                              onChange={(event) => setScheduledExpenseDrafts((current) => current.map((item) => item.key === expense.key ? { ...item, merchant_name: event.target.value } : item))}
+                          <label>Merchant or vendor names
+                            <textarea
+                              rows={3}
+                              maxLength={2019}
+                              placeholder={"e.g. Northstar Electric\nNorthstar Utilities"}
+                              value={expense.merchant_names_text}
+                              onChange={(event) => setScheduledExpenseDrafts((current) => current.map((item) => item.key === expense.key ? { ...item, merchant_names_text: event.target.value } : item))}
                             />
+                            <small>Enter one name per line. A transaction matching any listed name can be linked.</small>
                           </label>
                           <label>Payment account
                             <select
@@ -2928,14 +2939,17 @@ export default function App() {
                 return (
                   <div className="subscription-tracker-list">
                     {month.payments.slice().sort((left, right) => left.due_date.localeCompare(right.due_date)).map((payment, index) => {
-                      const requiresSetup = !payment.account_name || !payment.merchant_name;
+                      const merchantNames = payment.merchant_names?.length
+                        ? payment.merchant_names
+                        : payment.merchant_name ? [payment.merchant_name] : [];
+                      const requiresSetup = !payment.account_name || merchantNames.length === 0;
                       const isOverdue = !payment.paid && payment.due_date < transactionDateKey(new Date());
                       return (
                         <article className={`subscription-payment-row ${payment.pending_review_id ? "subscription-payment-review" : ""}`} key={`${payment.expense_id}-${payment.due_date}-${index}`}>
                           <div className="subscription-payment-date">{displayDate(payment.due_date, { month: "short", day: "numeric" })}</div>
                           <div className="subscription-payment-info">
                             <strong>{payment.name}</strong>
-                            <span>{payment.merchant_name || "Merchant not set"}{payment.account_name ? ` · ${payment.account_name}` : " · Account not set"}</span>
+                            <span>{merchantNames.length ? merchantNames.join(" / ") : "Merchant not set"}{payment.account_name ? ` · ${payment.account_name}` : " · Account not set"}</span>
                             <small>{payment.tracking_mode === "variable" ? "Variable bill" : "Fixed subscription"}</small>
                           </div>
                           <div className="subscription-payment-amount">

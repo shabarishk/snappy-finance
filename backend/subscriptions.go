@@ -15,6 +15,7 @@ type subscriptionTrackerPayment struct {
 	ExpenseID       int64    `json:"expense_id"`
 	Name            string   `json:"name"`
 	MerchantName    string   `json:"merchant_name"`
+	MerchantNames   []string `json:"merchant_names"`
 	AccountName     string   `json:"account_name"`
 	DueDate         string   `json:"due_date"`
 	Amount          float64  `json:"amount"`
@@ -106,15 +107,16 @@ func (a *app) getSubscriptionTracker(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			payment := subscriptionTrackerPayment{
-				ExpenseID:    expense.ID,
-				Name:         expense.Name,
-				MerchantName: expense.MerchantName,
-				DueDate:      due.Format("2006-01-02"),
-				Amount:       expense.Amount,
-				TrackingMode: expense.TrackingMode,
-				AccountName:  accountName,
+				ExpenseID:     expense.ID,
+				Name:          expense.Name,
+				MerchantName:  expense.MerchantName,
+				MerchantNames: expense.MerchantNames,
+				DueDate:       due.Format("2006-01-02"),
+				Amount:        expense.Amount,
+				TrackingMode:  expense.TrackingMode,
+				AccountName:   accountName,
 			}
-			if expense.AccountID == nil || expense.MerchantName == "" {
+			if expense.AccountID == nil || len(expense.MerchantNames) == 0 {
 				paymentsByMonth[spendMonth] = append(paymentsByMonth[spendMonth], payment)
 				continue
 			}
@@ -190,11 +192,11 @@ func (a *app) getSubscriptionTracker(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				if !previouslyMatched {
-					name := transactionName
-					if merchantName != nil && strings.TrimSpace(*merchantName) != "" {
-						name = *merchantName
+					matchesMerchant := sameAnyMerchant(expense.MerchantNames, transactionName)
+					if merchantName != nil {
+						matchesMerchant = matchesMerchant || sameAnyMerchant(expense.MerchantNames, *merchantName)
 					}
-					if !sameMerchant(expense.MerchantName, name) || amount <= 0 {
+					if !matchesMerchant || amount <= 0 {
 						continue
 					}
 					if expense.TrackingMode == "fixed" && !amountMatchesSchedule(expense.Amount, amount) && amount < expense.Amount {
@@ -424,6 +426,15 @@ func sameMerchant(scheduled, actual string) bool {
 	scheduled = normalizeMerchant(scheduled)
 	actual = normalizeMerchant(actual)
 	return scheduled != "" && actual != "" && (scheduled == actual || strings.HasPrefix(actual, scheduled))
+}
+
+func sameAnyMerchant(scheduled []string, actual string) bool {
+	for _, candidate := range scheduled {
+		if sameMerchant(candidate, actual) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeMerchant(value string) string {

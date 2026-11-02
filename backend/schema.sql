@@ -104,6 +104,11 @@ ALTER TABLE scheduled_projection_expenses
 ALTER TABLE scheduled_projection_expenses
     ADD COLUMN IF NOT EXISTS merchant_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE scheduled_projection_expenses
+    ADD COLUMN IF NOT EXISTS merchant_names TEXT[] NOT NULL DEFAULT '{}';
+UPDATE scheduled_projection_expenses
+SET merchant_names = ARRAY[merchant_name]
+WHERE cardinality(merchant_names) = 0 AND btrim(merchant_name) <> '';
+ALTER TABLE scheduled_projection_expenses
     ADD COLUMN IF NOT EXISTS account_id TEXT REFERENCES accounts(account_id) ON DELETE SET NULL;
 ALTER TABLE scheduled_projection_expenses
     ADD COLUMN IF NOT EXISTS tracking_mode TEXT NOT NULL DEFAULT 'fixed';

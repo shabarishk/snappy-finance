@@ -100,6 +100,25 @@ func TestSubscriptionPaymentMatchHelpers(t *testing.T) {
 	}
 }
 
+func TestScheduledPaymentMatchesAnyConfiguredMerchant(t *testing.T) {
+	merchants := normalizeScheduledMerchantNames(
+		[]string{" Northstar Electric ", "NORTHSTAR-ELECTRIC", "Northstar Utilities"},
+		"",
+	)
+	if len(merchants) != 2 {
+		t.Fatalf("normalized merchants = %v, want duplicate names removed", merchants)
+	}
+	if !sameAnyMerchant(merchants, "NORTHSTAR UTILITIES AUTOPAY") {
+		t.Error("transaction matching a secondary merchant name should match")
+	}
+	if sameAnyMerchant(merchants, "Different Utility Company") {
+		t.Error("transaction unrelated to all configured merchant names should not match")
+	}
+	if got := normalizeScheduledMerchantNames(nil, " Legacy Merchant "); len(got) != 1 || got[0] != "Legacy Merchant" {
+		t.Errorf("legacy merchant fallback = %v, want [Legacy Merchant]", got)
+	}
+}
+
 func TestSubscriptionTrackerUsesCurrentAndNextTwoSpendMonths(t *testing.T) {
 	startMonth := time.Date(2026, time.October, 26, 0, 0, 0, 0, time.UTC)
 	start, end, months := subscriptionTrackerPeriod(startMonth)

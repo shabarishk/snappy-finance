@@ -40,25 +40,27 @@ type projectionDeposit struct {
 }
 
 type scheduledExpense struct {
-	ID           int64   `json:"expense_id"`
-	Name         string  `json:"name"`
-	Amount       float64 `json:"amount"`
-	Frequency    string  `json:"frequency"`
-	FirstDueDate string  `json:"first_due_date"`
-	MerchantName string  `json:"merchant_name"`
-	AccountID    *string `json:"account_id"`
-	TrackingMode string  `json:"tracking_mode"`
+	ID            int64    `json:"expense_id"`
+	Name          string   `json:"name"`
+	Amount        float64  `json:"amount"`
+	Frequency     string   `json:"frequency"`
+	FirstDueDate  string   `json:"first_due_date"`
+	MerchantName  string   `json:"merchant_name"`
+	MerchantNames []string `json:"merchant_names"`
+	AccountID     *string  `json:"account_id"`
+	TrackingMode  string   `json:"tracking_mode"`
 }
 
 type scheduledExpenseInput struct {
-	ID           int64   `json:"expense_id"`
-	Name         string  `json:"name"`
-	Amount       float64 `json:"amount"`
-	Frequency    string  `json:"frequency"`
-	FirstDueDate string  `json:"first_due_date"`
-	MerchantName string  `json:"merchant_name"`
-	AccountID    *string `json:"account_id"`
-	TrackingMode string  `json:"tracking_mode"`
+	ID            int64    `json:"expense_id"`
+	Name          string   `json:"name"`
+	Amount        float64  `json:"amount"`
+	Frequency     string   `json:"frequency"`
+	FirstDueDate  string   `json:"first_due_date"`
+	MerchantName  string   `json:"merchant_name"`
+	MerchantNames []string `json:"merchant_names"`
+	AccountID     *string  `json:"account_id"`
+	TrackingMode  string   `json:"tracking_mode"`
 }
 
 type scheduledExpenseOccurrence struct {
@@ -301,6 +303,16 @@ func (a *app) saveScheduledProjectionExpenses(w http.ResponseWriter, r *http.Req
 		expense := &input.Expenses[index]
 		expense.Name = strings.TrimSpace(expense.Name)
 		expense.MerchantName = strings.TrimSpace(expense.MerchantName)
+		expense.MerchantNames = normalizeScheduledMerchantNames(expense.MerchantNames, expense.MerchantName)
+		if len(expense.MerchantNames) > 20 {
+			writeError(w, http.StatusBadRequest, "no more than 20 merchant names may be configured per scheduled expense")
+			return
+		}
+		if len(expense.MerchantNames) > 0 {
+			expense.MerchantName = expense.MerchantNames[0]
+		} else {
+			expense.MerchantName = ""
+		}
 		if expense.AccountID != nil {
 			accountID := strings.TrimSpace(*expense.AccountID)
 			if accountID == "" {
@@ -313,9 +325,11 @@ func (a *app) saveScheduledProjectionExpenses(w http.ResponseWriter, r *http.Req
 			writeError(w, http.StatusBadRequest, "scheduled expense names must be 1 to 100 characters")
 			return
 		}
-		if len(expense.MerchantName) > 100 {
-			writeError(w, http.StatusBadRequest, "merchant names must be 100 characters or fewer")
-			return
+		for _, merchantName := range expense.MerchantNames {
+			if len(merchantName) > 100 {
+				writeError(w, http.StatusBadRequest, "merchant names must be 100 characters or fewer")
+				return
+			}
 		}
 		if expense.Amount < 0 {
 			writeError(w, http.StatusBadRequest, "scheduled expense amounts must be zero or greater")
@@ -397,18 +411,19 @@ func (a *app) saveScheduledProjectionExpenses(w http.ResponseWriter, r *http.Req
 			_, err = tx.Exec(r.Context(), `
 				UPDATE scheduled_projection_expenses
 				SET name = $1, amount = $2, frequency = $3, first_due_date = $4,
-					merchant_name = $5, account_id = $6, tracking_mode = $7, active = TRUE
-				WHERE expense_id = $8`,
+					merchant_name = $5, merchant_names = $6, account_id = $7,
+					tracking_mode = $8, active = TRUE
+				WHERE expense_id = $9`,
 				expense.Name, expense.Amount, expense.Frequency, expense.FirstDueDate,
-				expense.MerchantName, expense.AccountID, expense.TrackingMode, expenseID)
+				expense.MerchantName, expense.MerchantNames, expense.AccountID, expense.TrackingMode, expenseID)
 		} else {
 			err = tx.QueryRow(r.Context(), `
 				INSERT INTO scheduled_projection_expenses
-					(name, amount, frequency, first_due_date, merchant_name, account_id, tracking_mode)
-				VALUES ($1, $2, $3, $4, $5, $6, $7)
+					(name, amount, frequency, first_due_date, merchant_name, merchant_names, account_id, tracking_mode)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 				RETURNING expense_id`,
 				expense.Name, expense.Amount, expense.Frequency, expense.FirstDueDate,
-				expense.MerchantName, expense.AccountID, expense.TrackingMode).Scan(&expenseID)
+				expense.MerchantName, expense.MerchantNames, expense.AccountID, expense.TrackingMode).Scan(&expenseID)
 		}
 		if err != nil {
 			log.Printf("save scheduled projection expense: %v", err)
@@ -452,7 +467,7 @@ func (a *app) loadScheduledExpenses(ctx context.Context) ([]scheduledExpense, er
 	expenses := make([]scheduledExpense, 0)
 	rows, err := a.db.Query(ctx, `
 		SELECT expense_id, name, amount, frequency, first_due_date,
-			merchant_name, account_id, tracking_mode
+			merchant_name, merchant_names, account_id, tracking_mode
 		FROM scheduled_projection_expenses
 		WHERE active = TRUE
 		ORDER BY first_due_date, expense_id`)
@@ -464,9 +479,10 @@ func (a *app) loadScheduledExpenses(ctx context.Context) ([]scheduledExpense, er
 		var expense scheduledExpense
 		var firstDueDate time.Time
 		if err := rows.Scan(&expense.ID, &expense.Name, &expense.Amount, &expense.Frequency, &firstDueDate,
-			&expense.MerchantName, &expense.AccountID, &expense.TrackingMode); err != nil {
+			&expense.MerchantName, &expense.MerchantNames, &expense.AccountID, &expense.TrackingMode); err != nil {
 			return nil, err
 		}
+		expense.MerchantNames = normalizeScheduledMerchantNames(expense.MerchantNames, expense.MerchantName)
 		expense.FirstDueDate = firstDueDate.Format("2006-01-02")
 		expenses = append(expenses, expense)
 	}
@@ -474,6 +490,33 @@ func (a *app) loadScheduledExpenses(ctx context.Context) ([]scheduledExpense, er
 		return nil, err
 	}
 	return expenses, nil
+}
+
+func normalizeScheduledMerchantNames(names []string, legacyName string) []string {
+	if len(names) == 0 && strings.TrimSpace(legacyName) != "" {
+		names = []string{legacyName}
+	}
+	normalized := make([]string, 0, len(names))
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		key := normalizeMerchant(name)
+		if name == "" || key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		normalized = append(normalized, name)
+	}
+	if len(normalized) == 0 && strings.TrimSpace(legacyName) != "" {
+		legacyName = strings.TrimSpace(legacyName)
+		if normalizeMerchant(legacyName) != "" {
+			return []string{legacyName}
+		}
+	}
+	return normalized
 }
 
 func (a *app) loadProjectionSettings(ctx context.Context) (projectionSettings, error) {
