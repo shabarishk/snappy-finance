@@ -775,8 +775,14 @@ func (a *app) syncItem(ctx context.Context, itemID string) error {
 			break
 		}
 	}
-	_, err = a.db.Exec(ctx, "UPDATE plaid_items SET cursor=$2, last_synced_at=NOW() WHERE item_id=$1", itemID, nextCursor)
+	_, err = a.db.Exec(ctx, "UPDATE plaid_items SET cursor=$2 WHERE item_id=$1", itemID, nextCursor)
 	if err != nil {
+		return err
+	}
+	if err := a.refreshAccounts(ctx, itemID, accessToken); err != nil {
+		return fmt.Errorf("refresh Plaid account balances: %w", err)
+	}
+	if _, err := a.db.Exec(ctx, "UPDATE plaid_items SET last_synced_at=NOW() WHERE item_id=$1", itemID); err != nil {
 		return err
 	}
 	liabilities, err := a.plaid.liabilitiesGet(ctx, accessToken)

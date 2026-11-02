@@ -31,7 +31,7 @@ A self-hosted personal finance app scaffold using Go, React, PostgreSQL, and Pla
 - The Accounts page on the sidebar lists linked accounts by Plaid connection, with connection-wide sync, per-account sync actions, and administrator unlink controls. Plaid sync and unlink operate on a whole connection, so unlinking removes all its accounts and synced data. Connections that Plaid no longer recognizes are skipped during global sync, retained locally until explicitly unlinked, and can be removed from the Accounts page.
 - Plaid Link token creation and public-token exchange.
 - AES-GCM encryption of stored Plaid access tokens.
-- Cursor-based Plaid Transactions Sync with added, modified, and removed transaction handling.
+- Cursor-based Plaid Transactions Sync with added, modified, and removed transaction handling; account details and balances are refreshed from Plaid during each sync.
 - Periodic sync worker and a manual sync action.
 - React dashboard for linked accounts and a separate Transactions page with cash, credit, and loan account tabs and selectable 25/50/75/100-item pages.
 - The Transactions page displays each transaction's account and has a right-side filter drawer for multi-account selection, expense categories, and showing only transactions without an administrator-assigned category for categorization.
