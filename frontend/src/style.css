@@ -311,6 +311,7 @@ button { cursor: pointer; }
 .account-connection-heading h3 { color: #34463e; font-size: 12px; margin: 0; }
 .account-connection-heading span { color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
 .account-connection-heading .secondary-button { flex: 0 0 auto; min-height: 34px; padding: 0 10px; }
+.account-connection-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .account-group + .account-group { border-top: 1px solid var(--line); }
 .account-group-heading { align-items: center; color: #52615a; display: flex; justify-content: space-between; padding: 15px 0 4px; }
 .account-group-heading h3 { font-size: 11px; font-weight: 600; margin: 0; }

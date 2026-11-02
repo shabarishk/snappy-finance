@@ -37,6 +37,50 @@ func TestRemoveItemCallsPlaidAndAcceptsSuccessResponse(t *testing.T) {
 	}
 }
 
+func TestCreateLiabilitiesUpdateLinkTokenRequestsConsentForExistingItem(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/link/token/create" {
+			t.Errorf("Plaid path = %q, want /link/token/create", r.URL.Path)
+		}
+		var input map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Errorf("decode Plaid request: %v", err)
+			return
+		}
+		if input["access_token"] != "existing-access-token" {
+			t.Errorf("access_token = %v, want the existing Item access token", input["access_token"])
+		}
+		if _, exists := input["products"]; exists {
+			t.Error("update-mode request should omit products")
+		}
+		products, ok := input["additional_consented_products"].([]any)
+		if !ok || len(products) != 1 || products[0] != "liabilities" {
+			t.Errorf("additional_consented_products = %v, want [liabilities]", input["additional_consented_products"])
+		}
+		user, ok := input["user"].(map[string]any)
+		if !ok || user["client_user_id"] != "snappy-finance-user" {
+			t.Errorf("user = %v, want the existing Link client user ID", input["user"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"link_token":"update-link-token"}`))
+	}))
+	defer server.Close()
+
+	client := &plaidClient{
+		clientID: "client",
+		secret:   "secret",
+		baseURL:  server.URL,
+		client:   server.Client(),
+	}
+	token, err := client.createLiabilitiesUpdateLinkToken(context.Background(), "existing-access-token")
+	if err != nil {
+		t.Fatalf("createLiabilitiesUpdateLinkToken: %v", err)
+	}
+	if token != "update-link-token" {
+		t.Fatalf("link token = %q, want update-link-token", token)
+	}
+}
+
 func TestPlaidItemNotFoundIsRecognized(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

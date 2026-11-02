@@ -109,6 +109,7 @@ func main() {
 	mux.Handle("POST /api/plaid/link-token", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.createLinkToken))))
 	mux.Handle("POST /api/plaid/exchange", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.exchangePublicToken))))
 	mux.Handle("POST /api/plaid/sync", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.syncNow))))
+	mux.Handle("POST /api/plaid/accounts/{accountID}/liabilities-link-token", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.createLiabilitiesUpdateLinkToken))))
 	mux.Handle("POST /api/plaid/accounts/{accountID}/sync", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.syncAccount))))
 	mux.Handle("DELETE /api/plaid/accounts/{accountID}", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.unlinkAccount))))
 	mux.Handle("GET /api/accounts", a.requireAuth(http.HandlerFunc(a.listAccounts)))
@@ -222,6 +223,50 @@ func (a *app) createLinkToken(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"link_token": token})
 }
 
+func (a *app) createLiabilitiesUpdateLinkToken(w http.ResponseWriter, r *http.Request) {
+	if !a.plaid.configured() {
+		writeError(w, http.StatusServiceUnavailable, "Plaid credentials are not configured")
+		return
+	}
+
+	var itemID string
+	var encrypted []byte
+	var demoData bool
+	err := a.db.QueryRow(r.Context(), `
+		SELECT item.item_id, item.access_token_encrypted, item.demo_data
+		FROM accounts account
+		JOIN plaid_items item USING (item_id)
+		WHERE account.account_id = $1 AND account.type = 'credit'`,
+		r.PathValue("accountID"),
+	).Scan(&itemID, &encrypted, &demoData)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "credit account not found")
+		return
+	}
+	if err != nil {
+		log.Printf("load Plaid Item for additional consent: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not prepare Plaid consent")
+		return
+	}
+	if demoData {
+		writeError(w, http.StatusBadRequest, "demo accounts do not support Plaid consent")
+		return
+	}
+	accessToken, err := decrypt(a.cfg.encryptionKey, encrypted)
+	if err != nil {
+		log.Printf("decrypt Plaid access token for additional consent: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not prepare Plaid consent")
+		return
+	}
+	token, err := a.plaid.createLiabilitiesUpdateLinkToken(r.Context(), accessToken)
+	if err != nil {
+		log.Printf("create Plaid liabilities update token for Item %s: %v", itemID, err)
+		writeError(w, http.StatusBadGateway, "could not start Plaid consent; check the API logs")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"link_token": token})
+}
+
 func (a *app) exchangePublicToken(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		PublicToken string `json:"public_token"`
@@ -292,7 +337,8 @@ func (a *app) syncAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "demo accounts cannot be synced")
 		return
 	}
-	if err := a.syncItem(r.Context(), itemID); err != nil {
+	statementRecordsUpdated, err := a.syncItemWithStatementCount(r.Context(), itemID)
+	if err != nil {
 		log.Printf("sync Plaid account %s: %v", accountID, err)
 		if isPlaidItemNotFound(err) {
 			writeError(w, http.StatusConflict, "Plaid no longer recognizes this connection. Use Unlink connection on the Accounts page to remove its stale local data.")
@@ -301,7 +347,10 @@ func (a *app) syncAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "account connection sync failed; check the API logs")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"synced": true})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"synced":                   true,
+		"statement_data_refreshed": statementRecordsUpdated > 0,
+	})
 }
 
 func (a *app) unlinkAccount(w http.ResponseWriter, r *http.Request) {
@@ -750,6 +799,11 @@ func (a *app) syncAll(ctx context.Context) ([]string, error) {
 }
 
 func (a *app) syncItem(ctx context.Context, itemID string) error {
+	_, err := a.syncItemWithStatementCount(ctx, itemID)
+	return err
+}
+
+func (a *app) syncItemWithStatementCount(ctx context.Context, itemID string) (int, error) {
 	a.syncMu.Lock()
 	defer a.syncMu.Unlock()
 
@@ -757,20 +811,20 @@ func (a *app) syncItem(ctx context.Context, itemID string) error {
 	var cursor string
 	err := a.db.QueryRow(ctx, "SELECT access_token_encrypted, cursor FROM plaid_items WHERE item_id=$1", itemID).Scan(&encrypted, &cursor)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	accessToken, err := decrypt(a.cfg.encryptionKey, encrypted)
 	if err != nil {
-		return fmt.Errorf("decrypt access token: %w", err)
+		return 0, fmt.Errorf("decrypt access token: %w", err)
 	}
 	nextCursor := cursor
 	for {
 		result, err := a.plaid.transactionsSync(ctx, accessToken, nextCursor)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if err := a.persistTransactionPage(ctx, itemID, result); err != nil {
-			return err
+			return 0, err
 		}
 		nextCursor = result.NextCursor
 		if !result.HasMore {
@@ -779,14 +833,15 @@ func (a *app) syncItem(ctx context.Context, itemID string) error {
 	}
 	_, err = a.db.Exec(ctx, "UPDATE plaid_items SET cursor=$2 WHERE item_id=$1", itemID, nextCursor)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if err := a.refreshAccounts(ctx, itemID, accessToken); err != nil {
-		return fmt.Errorf("refresh Plaid account balances: %w", err)
+		return 0, fmt.Errorf("refresh Plaid account balances: %w", err)
 	}
 	if _, err := a.db.Exec(ctx, "UPDATE plaid_items SET last_synced_at=NOW() WHERE item_id=$1", itemID); err != nil {
-		return err
+		return 0, err
 	}
+	statementRecordsUpdated := 0
 	liabilities, err := a.plaid.liabilitiesGet(ctx, accessToken)
 	if err != nil {
 		if isPlaidErrorCode(err, "ADDITIONAL_CONSENT_REQUIRED") {
@@ -794,38 +849,42 @@ func (a *app) syncItem(ctx context.Context, itemID string) error {
 		} else {
 			log.Printf("Plaid credit statement data unavailable for Item %s (manual entry remains available): %v", itemID, err)
 		}
-	} else if err := a.persistCreditStatements(ctx, liabilities); err != nil {
-		return fmt.Errorf("persist Plaid credit statements: %w", err)
+	} else {
+		statementRecordsUpdated, err = a.persistCreditStatements(ctx, liabilities)
+		if err != nil {
+			return 0, fmt.Errorf("persist Plaid credit statements: %w", err)
+		}
 	}
 	if err := a.matchInterAccountTransfers(ctx); err != nil {
-		return fmt.Errorf("match inter-account transfers: %w", err)
+		return 0, fmt.Errorf("match inter-account transfers: %w", err)
 	}
-	return nil
+	return statementRecordsUpdated, nil
 }
 
-func (a *app) persistCreditStatements(ctx context.Context, liabilities []plaidCreditLiability) error {
+func (a *app) persistCreditStatements(ctx context.Context, liabilities []plaidCreditLiability) (int, error) {
 	tx, err := a.db.Begin(ctx)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer tx.Rollback(ctx)
+	statementRecordsUpdated := 0
 	for _, liability := range liabilities {
 		if liability.LastStatementBalance == nil || liability.NextPaymentDueDate == nil {
 			continue
 		}
 		dueDate, err := time.Parse("2006-01-02", *liability.NextPaymentDueDate)
 		if err != nil {
-			return fmt.Errorf("parse Plaid payment due date: %w", err)
+			return 0, fmt.Errorf("parse Plaid payment due date: %w", err)
 		}
 		var statementDate any
 		if liability.LastStatementIssueDate != nil {
 			parsedDate, err := time.Parse("2006-01-02", *liability.LastStatementIssueDate)
 			if err != nil {
-				return fmt.Errorf("parse Plaid statement issue date: %w", err)
+				return 0, fmt.Errorf("parse Plaid statement issue date: %w", err)
 			}
 			statementDate = parsedDate
 		}
-		_, err = tx.Exec(ctx, `
+		result, err := tx.Exec(ctx, `
 			INSERT INTO credit_card_statements (
 				account_id, due_date, statement_date, statement_balance, source
 			)
@@ -839,10 +898,16 @@ func (a *app) persistCreditStatements(ctx context.Context, liabilities []plaidCr
 				updated_at = NOW()`,
 			liability.AccountID, dueDate, statementDate, *liability.LastStatementBalance)
 		if err != nil {
-			return err
+			return 0, err
+		}
+		if result.RowsAffected() > 0 {
+			statementRecordsUpdated++
 		}
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return statementRecordsUpdated, nil
 }
 
 func (a *app) persistTransactionPage(ctx context.Context, itemID string, result syncResponse) error {

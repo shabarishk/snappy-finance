@@ -521,6 +521,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [syncingConnectionID, setSyncingConnectionID] = useState<string | null>(null);
   const [unlinkingConnectionID, setUnlinkingConnectionID] = useState<string | null>(null);
+  const [updatingConsentConnectionID, setUpdatingConsentConnectionID] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const monthPickerRef = useRef<HTMLDivElement>(null);
@@ -1628,6 +1629,55 @@ export default function App() {
     }
   }
 
+  async function requestLiabilitiesConsent(account: Account) {
+    setUpdatingConsentConnectionID(account.item_id);
+    setError("");
+    setNotice("");
+    let consentCompleted = false;
+    try {
+      if (!window.Plaid) throw new Error("Plaid Link did not load. Check your network and reload.");
+      const { link_token: linkToken } = await api<{ link_token: string }>(
+        `/api/plaid/accounts/${encodeURIComponent(account.account_id)}/liabilities-link-token`,
+        { method: "POST" },
+      );
+      const handler = window.Plaid.create({
+        token: linkToken,
+        onSuccess: async () => {
+          consentCompleted = true;
+          try {
+            const result = await api<{ statement_data_refreshed: boolean }>(
+              `/api/plaid/accounts/${encodeURIComponent(account.account_id)}/sync`,
+              { method: "POST" },
+            );
+            await refresh();
+            setNotice(result.statement_data_refreshed
+              ? "Plaid consent updated and statement balance data refreshed."
+              : "Plaid consent was completed, but this connection did not return a statement balance and due date. The institution may not provide them yet; you can enter a statement manually in Financial management.");
+          } catch (err) {
+            setError(err instanceof Error
+              ? `Consent may have been granted, but the account sync failed: ${err.message}`
+              : "Consent may have been granted, but the account sync failed.");
+          } finally {
+            setUpdatingConsentConnectionID(null);
+          }
+        },
+        onExit: (err) => {
+          if (err) {
+            setError("Plaid Link could not complete the statement-data consent flow.");
+            setUpdatingConsentConnectionID(null);
+          } else if (!consentCompleted) {
+            setNotice("Plaid Link closed before statement-data consent was completed.");
+            setUpdatingConsentConnectionID(null);
+          }
+        },
+      });
+      handler.open();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not start Plaid consent");
+      setUpdatingConsentConnectionID(null);
+    }
+  }
+
   async function syncNow() {
     setBusy(true);
     setError("");
@@ -2106,9 +2156,11 @@ export default function App() {
         </div>
       ) : (
         <>
-          <p className="finance-help account-sync-help">Plaid syncs transactions per connection. Syncing an account refreshes all accounts in that connection. Unlinking removes the connection and its synced data.</p>
+          <p className="finance-help account-sync-help">Plaid syncs transactions per connection. Syncing an account refreshes all accounts in that connection. For credit-card statement data, an administrator can request additional Plaid consent; the account holder must complete the Link flow. Unlinking removes the connection and its synced data.</p>
           <div className="account-connections">
-            {accountConnections.map((connection) => (
+            {accountConnections.map((connection) => {
+              const creditAccount = connection.accounts.find((account) => account.type.toLowerCase() === "credit");
+              return (
               <section className="account-connection" key={connection.itemID}>
                 <header className="account-connection-heading">
                   <div>
@@ -2116,12 +2168,22 @@ export default function App() {
                     <span>{connection.accounts.length} linked account{connection.accounts.length === 1 ? "" : "s"} · {connection.lastSyncedAt ? `Last synced ${new Date(connection.lastSyncedAt).toLocaleString()}` : "Not synced yet"}{connection.demoData ? " · DEMO" : ""}</span>
                   </div>
                   {profile?.role === "admin" && !connection.demoData && (
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      disabled={busy || syncingConnectionID === connection.itemID || unlinkingConnectionID === connection.itemID}
-                      onClick={() => void unlinkAccountConnection(connection)}
-                    >{unlinkingConnectionID === connection.itemID ? "Unlinking…" : "Unlink connection"}</button>
+                    <div className="account-connection-actions">
+                      {creditAccount && (
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          disabled={busy || syncingConnectionID === connection.itemID || updatingConsentConnectionID !== null || unlinkingConnectionID === connection.itemID}
+                          onClick={() => void requestLiabilitiesConsent(creditAccount)}
+                        >{updatingConsentConnectionID === connection.itemID ? "Updating access…" : "Request statement consent"}</button>
+                      )}
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        disabled={busy || syncingConnectionID === connection.itemID || updatingConsentConnectionID !== null || unlinkingConnectionID === connection.itemID}
+                        onClick={() => void unlinkAccountConnection(connection)}
+                      >{unlinkingConnectionID === connection.itemID ? "Unlinking…" : "Unlink connection"}</button>
+                    </div>
                   )}
                 </header>
                 {connection.groups.map((group) => (
@@ -2142,7 +2204,7 @@ export default function App() {
                               <button
                                 type="button"
                                 className="secondary-button"
-                                disabled={busy || syncing || unlinkingConnectionID === account.item_id}
+                                disabled={busy || syncing || updatingConsentConnectionID !== null || unlinkingConnectionID === account.item_id}
                                 onClick={() => void syncAccount(account)}
                               ><RefreshCw size={14} className={syncing ? "spin" : ""} /> {syncing ? "Syncing" : "Sync transactions"}</button>
                             </div>
@@ -2153,7 +2215,8 @@ export default function App() {
                   </section>
                 ))}
               </section>
-            ))}
+              );
+            })}
           </div>
         </>
       )}
@@ -2331,12 +2394,12 @@ export default function App() {
               </button>
             )}
             {(activePage === "overview" || activePage === "accounts") && profile?.role === "admin" && <>
-              <button className="secondary-button" onClick={() => void syncNow()} disabled={busy || !accounts.some((account) => !account.demo_data)}>
+              <button className="secondary-button" onClick={() => void syncNow()} disabled={busy || updatingConsentConnectionID !== null || !accounts.some((account) => !account.demo_data)}>
                 <RefreshCw size={16} className={busy ? "spin" : ""} /> Sync
               </button>
             </>}
             {activePage === "accounts" && profile?.role === "admin" && <>
-              <button className="primary-button" onClick={() => void connectAccount()} disabled={busy}>
+              <button className="primary-button" onClick={() => void connectAccount()} disabled={busy || updatingConsentConnectionID !== null}>
                 <span>+</span> Connect account
               </button>
             </>}

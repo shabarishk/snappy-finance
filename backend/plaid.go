@@ -119,6 +119,21 @@ func (p *plaidClient) createLinkToken(ctx context.Context) (string, error) {
 	return result.LinkToken, err
 }
 
+func (p *plaidClient) createLiabilitiesUpdateLinkToken(ctx context.Context, accessToken string) (string, error) {
+	var result struct {
+		LinkToken string `json:"link_token"`
+	}
+	err := p.post(ctx, "/link/token/create", map[string]any{
+		"client_name":                   "Snappy Finance",
+		"language":                      "en",
+		"country_codes":                 []string{"US"},
+		"user":                          map[string]string{"client_user_id": "snappy-finance-user"},
+		"access_token":                  accessToken,
+		"additional_consented_products": []string{"liabilities"},
+	}, &result)
+	return result.LinkToken, err
+}
+
 type exchangeResponse struct {
 	AccessToken string `json:"access_token"`
 	ItemID      string `json:"item_id"`
