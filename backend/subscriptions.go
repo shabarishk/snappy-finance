@@ -127,11 +127,40 @@ func (a *app) getSubscriptionTracker(w http.ResponseWriter, r *http.Request) {
 				transactionEnd = cycleEnd.AddDate(0, 1, 0)
 			}
 			rows, err := a.db.Query(r.Context(), `
-				SELECT transaction_id, name, merchant_name, amount, transaction_date::text
-				FROM transactions
-				WHERE account_id = $1 AND transaction_date BETWEEN $2 AND $3 AND pending = FALSE
-				ORDER BY ABS(transaction_date - $4), transaction_date DESC`,
-				*expense.AccountID, transactionStart, transactionEnd, due)
+				SELECT txn.transaction_id, txn.name, txn.merchant_name,
+					txn.amount, txn.transaction_date::text,
+					EXISTS (
+						SELECT 1
+						FROM subscription_payment_history history
+						WHERE history.expense_id = $5
+						  AND history.transaction_id = txn.transaction_id
+						  AND history.due_date = $6
+					) AS previously_matched,
+					COALESCE(account.official_name, account.name, '')
+				FROM transactions txn
+				LEFT JOIN accounts account USING (account_id)
+				WHERE txn.pending = FALSE
+				  AND (
+					  EXISTS (
+						  SELECT 1
+						  FROM subscription_payment_history history
+						  WHERE history.expense_id = $5
+						    AND history.transaction_id = txn.transaction_id
+						    AND history.due_date = $6
+					  )
+					  OR (
+						  txn.account_id = $1
+						  AND txn.transaction_date BETWEEN $2 AND $3
+						  AND NOT EXISTS (
+							  SELECT 1
+							  FROM subscription_payment_history history
+							  WHERE history.expense_id = $5
+							    AND history.transaction_id = txn.transaction_id
+						  )
+					  )
+				  )
+				ORDER BY previously_matched DESC, ABS(txn.transaction_date - $4), txn.transaction_date DESC`,
+				*expense.AccountID, transactionStart, transactionEnd, due, expense.ID, due)
 			if err != nil {
 				log.Printf("find subscription payment transactions: %v", err)
 				writeError(w, http.StatusInternalServerError, "could not load subscription tracker")
@@ -139,9 +168,11 @@ func (a *app) getSubscriptionTracker(w http.ResponseWriter, r *http.Request) {
 			}
 			for rows.Next() {
 				var transactionID, transactionName, paymentDate string
+				var transactionAccountName string
 				var merchantName *string
 				var amount float64
-				if err := rows.Scan(&transactionID, &transactionName, &merchantName, &amount, &paymentDate); err != nil {
+				var previouslyMatched bool
+				if err := rows.Scan(&transactionID, &transactionName, &merchantName, &amount, &paymentDate, &previouslyMatched, &transactionAccountName); err != nil {
 					rows.Close()
 					log.Printf("scan subscription payment transaction: %v", err)
 					writeError(w, http.StatusInternalServerError, "could not load subscription tracker")
@@ -150,15 +181,17 @@ func (a *app) getSubscriptionTracker(w http.ResponseWriter, r *http.Request) {
 				if usedTransactions[transactionID] {
 					continue
 				}
-				name := transactionName
-				if merchantName != nil && strings.TrimSpace(*merchantName) != "" {
-					name = *merchantName
-				}
-				if !sameMerchant(expense.MerchantName, name) || amount <= 0 {
-					continue
-				}
-				if expense.TrackingMode == "fixed" && !amountMatchesSchedule(expense.Amount, amount) && amount < expense.Amount {
-					continue
+				if !previouslyMatched {
+					name := transactionName
+					if merchantName != nil && strings.TrimSpace(*merchantName) != "" {
+						name = *merchantName
+					}
+					if !sameMerchant(expense.MerchantName, name) || amount <= 0 {
+						continue
+					}
+					if expense.TrackingMode == "fixed" && !amountMatchesSchedule(expense.Amount, amount) && amount < expense.Amount {
+						continue
+					}
 				}
 				transactionDate, err := time.Parse("2006-01-02", paymentDate)
 				if err != nil {
@@ -167,11 +200,16 @@ func (a *app) getSubscriptionTracker(w http.ResponseWriter, r *http.Request) {
 					writeError(w, http.StatusInternalServerError, "could not load subscription tracker")
 					return
 				}
-				transactionMonth, included := transactionSpendMonth(transactionDate, accountType, closeDay, dueDay)
-				if !included || transactionMonth != spendMonth {
-					continue
+				if !previouslyMatched {
+					transactionMonth, included := transactionSpendMonth(transactionDate, accountType, closeDay, dueDay)
+					if !included || transactionMonth != spendMonth {
+						continue
+					}
 				}
 				payment.Paid = true
+				if transactionAccountName != "" {
+					payment.AccountName = transactionAccountName
+				}
 				usedTransactions[transactionID] = true
 				payment.ActualAmount = &amount
 				payment.PaymentDate = &paymentDate
@@ -243,7 +281,8 @@ func (a *app) getSubscriptionTracker(w http.ResponseWriter, r *http.Request) {
 			history.due_date::text, history.payment_date::text, history.amount
 		FROM subscription_payment_history history
 		JOIN scheduled_projection_expenses expense ON expense.expense_id = history.expense_id
-		LEFT JOIN accounts account ON account.account_id = expense.account_id
+		LEFT JOIN transactions txn ON txn.transaction_id = history.transaction_id
+		LEFT JOIN accounts account ON account.account_id = txn.account_id
 		ORDER BY history.payment_date DESC, history.history_id DESC
 		LIMIT 12`)
 	if err != nil {

@@ -1795,7 +1795,7 @@ export default function App() {
                 <div className="empty-state compact">Loading scheduled expenses…</div>
               ) : (
                 <form className="projection-settings-form" onSubmit={saveScheduledExpenses}>
-                  <p className="projection-help">Each schedule starts on its first due date. One-time expenses occur once; weekly repeats every 7 days, and monthly, every-two-months, and annual schedules follow that date’s calendar day.</p>
+                  <p className="projection-help">Each schedule starts on its first due date. One-time expenses occur once; weekly repeats every 7 days, and monthly, every-two-months, and annual schedules follow that date’s calendar day. Changing the payment account affects future matching; previously matched transactions stay in the schedule’s history.</p>
                   {scheduledExpenseDrafts.length > 0 ? (
                     <div className="scheduled-expense-list">
                       {scheduledExpenseDrafts.map((expense) => (
