@@ -25,6 +25,56 @@ func TestSpendCycleStart(t *testing.T) {
 	}
 }
 
+func TestConfigurableSpendCycleClampsShortMonths(t *testing.T) {
+	tests := []struct {
+		date    string
+		start   int
+		want    string
+		wantEnd string
+	}{
+		{date: "2026-03-09", start: 10, want: "2026-02-10", wantEnd: "2026-03-09"},
+		{date: "2026-03-10", start: 10, want: "2026-03-10", wantEnd: "2026-04-09"},
+		{date: "2026-02-28", start: 31, want: "2026-02-28", wantEnd: "2026-03-30"},
+	}
+	for _, test := range tests {
+		date, err := time.Parse("2006-01-02", test.date)
+		if err != nil {
+			t.Fatal(err)
+		}
+		start := spendCycleStartOn(date, test.start)
+		if got := start.Format("2006-01-02"); got != test.want {
+			t.Errorf("spendCycleStartOn(%s, %d) = %s, want %s", test.date, test.start, got, test.want)
+		}
+		if got := spendCycleEndOn(start, test.start).Format("2006-01-02"); got != test.wantEnd {
+			t.Errorf("spendCycleEndOn(%s, %d) = %s, want %s", test.want, test.start, got, test.wantEnd)
+		}
+	}
+}
+
+func TestIncomeProjectionsUseConfiguredCycleBoundaries(t *testing.T) {
+	periods := calculateIncomeProjectionsOn(
+		projectionSettings{},
+		nil,
+		time.Date(2026, time.February, 15, 0, 0, 0, 0, time.UTC),
+		31,
+	)
+	if len(periods) != 13 {
+		t.Fatalf("projection period count = %d, want 13", len(periods))
+	}
+	if got, want := periods[0].SpendMonthStart, "2026-01-31"; got != want {
+		t.Errorf("current period start = %s, want %s", got, want)
+	}
+	if got, want := periods[0].SpendMonthEnd, "2026-02-27"; got != want {
+		t.Errorf("current period end = %s, want %s", got, want)
+	}
+	if got, want := periods[1].SpendMonthStart, "2026-02-28"; got != want {
+		t.Errorf("next period start = %s, want %s", got, want)
+	}
+	if got, want := periods[2].SpendMonthStart, "2026-03-31"; got != want {
+		t.Errorf("following period start = %s, want %s", got, want)
+	}
+}
+
 func TestSubscriptionPaymentMatchHelpers(t *testing.T) {
 	tests := []struct {
 		scheduled string
@@ -67,6 +117,19 @@ func TestSubscriptionTrackerUsesCurrentAndNextTwoSpendMonths(t *testing.T) {
 		if months[index] != wantMonths[index] {
 			t.Errorf("tracker month %d = %s, want %s", index, months[index], wantMonths[index])
 		}
+	}
+}
+
+func TestSubscriptionTrackerUsesConfiguredStartDay(t *testing.T) {
+	start, end, months := subscriptionTrackerPeriodOn(time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC), 10)
+	if got, want := start.Format("2006-01-02"), "2026-10-10"; got != want {
+		t.Errorf("tracker period start = %s, want %s", got, want)
+	}
+	if got, want := end.Format("2006-01-02"), "2027-01-09"; got != want {
+		t.Errorf("tracker period end = %s, want %s", got, want)
+	}
+	if got, want := len(months), 3; got != want {
+		t.Fatalf("tracker month count = %d, want %d", got, want)
 	}
 }
 

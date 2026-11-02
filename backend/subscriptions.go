@@ -57,7 +57,13 @@ func (a *app) getSubscriptionTracker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	startMonth = time.Date(startMonth.Year(), startMonth.Month(), 1, 0, 0, 0, 0, time.UTC)
-	_, periodEnd, monthKeys := subscriptionTrackerPeriod(startMonth)
+	spendMonthStartDay, err := a.getSpendMonthStartDay(r.Context())
+	if err != nil {
+		log.Printf("read spend month start day: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load subscription tracker")
+		return
+	}
+	_, periodEnd, monthKeys := subscriptionTrackerPeriodOn(startMonth, spendMonthStartDay)
 	occurrenceStart := startMonth.AddDate(0, -1, 0)
 	paymentsByMonth := make(map[string][]subscriptionTrackerPayment, 3)
 	for _, monthKey := range monthKeys {
@@ -95,7 +101,7 @@ func (a *app) getSubscriptionTracker(w http.ResponseWriter, r *http.Request) {
 		}
 		usedTransactions := make(map[string]bool)
 		for _, due := range scheduledExpenseDueDates(expense.Frequency, dueDate, occurrenceStart, periodEnd) {
-			spendMonth := scheduledPaymentSpendMonth(due, accountType, closeDay, dueDay)
+			spendMonth := scheduledPaymentSpendMonthOn(due, accountType, closeDay, dueDay, spendMonthStartDay)
 			if _, included := paymentsByMonth[spendMonth]; !included {
 				continue
 			}
@@ -118,13 +124,15 @@ func (a *app) getSubscriptionTracker(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, "could not load subscription tracker")
 				return
 			}
-			cycleStart := time.Date(spendMonthDate.Year(), spendMonthDate.Month(), 4, 0, 0, 0, 0, time.UTC)
-			cycleEnd := cycleStart.AddDate(0, 1, 0).AddDate(0, 0, -1)
+			cycleStart := spendMonthStart(spendMonthDate, spendMonthStartDay)
+			cycleEnd := spendCycleEndOn(cycleStart, spendMonthStartDay)
 			transactionStart := cycleStart
 			transactionEnd := cycleEnd
 			if accountType == "credit" {
-				transactionStart = cycleStart.AddDate(0, -2, 0)
-				transactionEnd = cycleEnd.AddDate(0, 1, 0)
+				priorMonth := time.Date(spendMonthDate.Year(), spendMonthDate.Month()-2, 1, 0, 0, 0, 0, time.UTC)
+				nextMonth := time.Date(spendMonthDate.Year(), spendMonthDate.Month()+1, 1, 0, 0, 0, 0, time.UTC)
+				transactionStart = spendMonthStart(priorMonth, spendMonthStartDay)
+				transactionEnd = spendCycleEndOn(spendMonthStart(nextMonth, spendMonthStartDay), spendMonthStartDay)
 			}
 			rows, err := a.db.Query(r.Context(), `
 				SELECT txn.transaction_id, txn.name, txn.merchant_name,
@@ -201,7 +209,7 @@ func (a *app) getSubscriptionTracker(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				if !previouslyMatched {
-					transactionMonth, included := transactionSpendMonth(transactionDate, accountType, closeDay, dueDay)
+					transactionMonth, included := transactionSpendMonthOn(transactionDate, accountType, closeDay, dueDay, spendMonthStartDay)
 					if !included || transactionMonth != spendMonth {
 						continue
 					}
@@ -434,21 +442,32 @@ func normalizeMerchant(value string) string {
 }
 
 func subscriptionTrackerPeriod(startMonth time.Time) (time.Time, time.Time, []string) {
+	return subscriptionTrackerPeriodOn(startMonth, 4)
+}
+
+func subscriptionTrackerPeriodOn(startMonth time.Time, spendMonthStartDay int) (time.Time, time.Time, []string) {
 	startMonth = time.Date(startMonth.Year(), startMonth.Month(), 1, 0, 0, 0, 0, time.UTC)
 	monthKeys := make([]string, 3)
 	for index := range monthKeys {
 		monthKeys[index] = startMonth.AddDate(0, index, 0).Format("2006-01")
 	}
-	return startMonth.AddDate(0, 0, 3), startMonth.AddDate(0, 3, 2), monthKeys
+	start := spendMonthStart(startMonth, spendMonthStartDay)
+	endMonth := time.Date(startMonth.Year(), startMonth.Month()+3, 1, 0, 0, 0, 0, time.UTC)
+	end := spendMonthStart(endMonth, spendMonthStartDay).AddDate(0, 0, -1)
+	return start, end, monthKeys
 }
 
 func scheduledPaymentSpendMonth(due time.Time, accountType string, closeDay, dueDay *int16) string {
+	return scheduledPaymentSpendMonthOn(due, accountType, closeDay, dueDay, 4)
+}
+
+func scheduledPaymentSpendMonthOn(due time.Time, accountType string, closeDay, dueDay *int16, spendMonthStartDay int) string {
 	if accountType != "" {
-		if spendMonth, included := transactionSpendMonth(due, accountType, closeDay, dueDay); included {
+		if spendMonth, included := transactionSpendMonthOn(due, accountType, closeDay, dueDay, spendMonthStartDay); included {
 			return spendMonth
 		}
 	}
-	return spendMonthForDate(due).Format("2006-01")
+	return spendMonthForDateOn(due, spendMonthStartDay).Format("2006-01")
 }
 
 func subscriptionTrackerTotals(payments []subscriptionTrackerPayment) (float64, float64) {

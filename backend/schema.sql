@@ -44,8 +44,13 @@ CREATE TABLE IF NOT EXISTS accounts (
 CREATE TABLE IF NOT EXISTS finance_settings (
     setting_id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (setting_id = 1),
     expendable_cash_account_id TEXT REFERENCES accounts(account_id) ON DELETE SET NULL,
+    spend_month_start_day SMALLINT NOT NULL DEFAULT 4 CHECK (spend_month_start_day BETWEEN 1 AND 31),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE finance_settings
+    ADD COLUMN IF NOT EXISTS spend_month_start_day SMALLINT NOT NULL DEFAULT 4
+    CHECK (spend_month_start_day BETWEEN 1 AND 31);
 
 INSERT INTO finance_settings (setting_id)
 VALUES (1)
@@ -146,8 +151,19 @@ CREATE TABLE IF NOT EXISTS credit_card_cycles (
 
 UPDATE projected_expendable_income
 SET frozen_at = NOW()
-WHERE frozen_at IS NULL
-  AND period_start + INTERVAL '1 month' - INTERVAL '1 day' < CURRENT_DATE;
+FROM finance_settings settings
+WHERE settings.setting_id = 1
+  AND projected_expendable_income.frozen_at IS NULL
+  AND (
+      (date_trunc('month', projected_expendable_income.period_start) + INTERVAL '1 month')::date
+      + LEAST(
+          settings.spend_month_start_day,
+          EXTRACT(DAY FROM (
+              date_trunc('month', projected_expendable_income.period_start)
+              + INTERVAL '2 months' - INTERVAL '1 day'
+          ))::int
+      ) - 2
+  ) < CURRENT_DATE;
 
 CREATE TABLE IF NOT EXISTS transaction_categories (
     category_id TEXT PRIMARY KEY,

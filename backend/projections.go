@@ -122,12 +122,16 @@ func (a *app) refreshOpenIncomeProjections(ctx context.Context) (projectionSetti
 	if err != nil {
 		return settings, nil, nil, err
 	}
+	spendMonthStartDay, err := a.getSpendMonthStartDay(ctx)
+	if err != nil {
+		return settings, nil, nil, err
+	}
 	var today time.Time
 	if err := a.db.QueryRow(ctx, "SELECT CURRENT_DATE").Scan(&today); err != nil {
 		return settings, nil, nil, err
 	}
 	today = dateOnly(today)
-	periods := calculateIncomeProjections(settings, expenses, today)
+	periods := calculateIncomeProjectionsOn(settings, expenses, today, spendMonthStartDay)
 	if err := a.persistOpenProjections(ctx, today, periods); err != nil {
 		return settings, nil, nil, err
 	}
@@ -135,11 +139,16 @@ func (a *app) refreshOpenIncomeProjections(ctx context.Context) (projectionSetti
 }
 
 func calculateIncomeProjections(settings projectionSettings, expenses []scheduledExpense, today time.Time) []incomeProjectionPeriod {
-	firstPeriod := spendCycleStart(today)
+	return calculateIncomeProjectionsOn(settings, expenses, today, 4)
+}
+
+func calculateIncomeProjectionsOn(settings projectionSettings, expenses []scheduledExpense, today time.Time, spendMonthStartDay int) []incomeProjectionPeriod {
+	firstPeriod := spendCycleStartOn(today, spendMonthStartDay)
 	periods := make([]incomeProjectionPeriod, 0, 13)
 	for index := 0; index <= 12; index++ {
-		periodStart := firstPeriod.AddDate(0, index, 0)
-		period := calculateIncomeProjection(settings, periodStart)
+		month := time.Date(firstPeriod.Year(), firstPeriod.Month()+time.Month(index), 1, 0, 0, 0, 0, time.UTC)
+		periodStart := spendMonthStart(month, spendMonthStartDay)
+		period := calculateIncomeProjectionOn(settings, periodStart, spendMonthStartDay)
 		applyScheduledExpenses(&period, expenses)
 		periods = append(periods, period)
 	}
@@ -593,13 +602,13 @@ func (a *app) persistOpenProjections(ctx context.Context, today time.Time, perio
 	return tx.Commit(ctx)
 }
 
-func (a *app) projectedIncomeForPeriod(ctx context.Context, periodStart, today time.Time) (*float64, error) {
+func (a *app) projectedIncomeForPeriod(ctx context.Context, periodStart, today time.Time, spendMonthStartDay int) (*float64, error) {
 	settings, err := a.loadProjectionSettings(ctx)
 	if err != nil {
 		return nil, err
 	}
-	period := calculateIncomeProjection(settings, periodStart)
-	periodEnd := spendCycleEnd(periodStart)
+	period := calculateIncomeProjectionOn(settings, periodStart, spendMonthStartDay)
+	periodEnd := spendCycleEndOn(periodStart, spendMonthStartDay)
 	if periodEnd.Before(today) {
 		var frozenAmount *float64
 		err := a.db.QueryRow(ctx, `
@@ -634,8 +643,12 @@ func (a *app) projectedIncomeForPeriod(ctx context.Context, periodStart, today t
 }
 
 func calculateIncomeProjection(settings projectionSettings, periodStart time.Time) incomeProjectionPeriod {
+	return calculateIncomeProjectionOn(settings, periodStart, 4)
+}
+
+func calculateIncomeProjectionOn(settings projectionSettings, periodStart time.Time, spendMonthStartDay int) incomeProjectionPeriod {
 	periodStart = dateOnly(periodStart)
-	periodEnd := spendCycleEnd(periodStart)
+	periodEnd := spendCycleEndOn(periodStart, spendMonthStartDay)
 	projection := incomeProjectionPeriod{
 		SpendMonthStart:      periodStart.Format("2006-01-02"),
 		SpendMonthEnd:        periodEnd.Format("2006-01-02"),
@@ -831,16 +844,26 @@ func expenseDateAtInterval(firstDue time.Time, intervalMonths int) time.Time {
 }
 
 func spendCycleStart(date time.Time) time.Time {
+	return spendCycleStartOn(date, 4)
+}
+
+func spendCycleStartOn(date time.Time, spendMonthStartDay int) time.Time {
 	date = dateOnly(date)
-	start := time.Date(date.Year(), date.Month(), 4, 0, 0, 0, 0, time.UTC)
-	if date.Day() < 4 {
-		start = start.AddDate(0, -1, 0)
+	start := spendMonthStart(date, spendMonthStartDay)
+	if date.Before(start) {
+		previousMonth := time.Date(date.Year(), date.Month()-1, 1, 0, 0, 0, 0, time.UTC)
+		return spendMonthStart(previousMonth, spendMonthStartDay)
 	}
 	return start
 }
 
 func spendCycleEnd(start time.Time) time.Time {
-	return dateOnly(start).AddDate(0, 1, 0).AddDate(0, 0, -1)
+	return spendCycleEndOn(start, 4)
+}
+
+func spendCycleEndOn(start time.Time, spendMonthStartDay int) time.Time {
+	nextMonth := time.Date(start.Year(), start.Month()+1, 1, 0, 0, 0, 0, time.UTC)
+	return spendMonthStart(nextMonth, spendMonthStartDay).AddDate(0, 0, -1)
 }
 
 func firstPaydayOnOrAfter(anchor, start time.Time) time.Time {

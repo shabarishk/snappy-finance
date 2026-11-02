@@ -48,9 +48,14 @@ type ManualCreditStatement = {
 };
 
 type FinanceSettings = {
+  spend_month_start_day: number;
   expendable_cash_account_id: string | null;
   manual_statements: ManualCreditStatement[];
   plaid_statements: ManualCreditStatement[];
+};
+
+type SpendMonthSettings = {
+  start_day: number;
 };
 
 type ProjectionSettings = {
@@ -238,6 +243,7 @@ const liquidityChartColors = ["#198568", "#4a9b78", "#79b58e", "#a6c89e", "#d0d9
 
 function SpendingPieChart({
   month,
+  spendMonthStartDay,
   canGoPrevious,
   canGoNext,
   onPrevious,
@@ -245,6 +251,7 @@ function SpendingPieChart({
   onCategoryClick,
 }: {
   month: LiquiditySpendMonth;
+  spendMonthStartDay: number;
   canGoPrevious: boolean;
   canGoNext: boolean;
   onPrevious: () => void;
@@ -256,7 +263,7 @@ function SpendingPieChart({
     ? null
     : month.projected_expendable_income - month.scheduled_expense_total - total;
   const [year, monthNumber] = month.spend_month.split("-").map(Number);
-  const periodLabel = getStatisticsRange("spend", month.spend_month).label;
+  const periodLabel = getStatisticsRange("spend", month.spend_month, spendMonthStartDay).label;
   let startAngle = -Math.PI / 2;
   const slices = month.categories.map((category, index) => {
     const angle = total > 0 ? (category.amount / total) * Math.PI * 2 : 0;
@@ -397,8 +404,9 @@ function monthKey(date: Date) {
   return transactionDateKey(date).slice(0, 7);
 }
 
-function getCurrentSpendMonth(today = new Date()) {
-  const month = today.getDate() >= 4
+function getCurrentSpendMonth(today = new Date(), spendMonthStartDay = 4) {
+  const startDay = Math.min(spendMonthStartDay, new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate());
+  const month = today.getDate() >= startDay
     ? new Date(today.getFullYear(), today.getMonth(), 1)
     : new Date(today.getFullYear(), today.getMonth() - 1, 1);
   return monthKey(month);
@@ -408,12 +416,15 @@ function getInitialMonthHistoryStart(today = new Date()) {
   return monthKey(new Date(today.getFullYear(), today.getMonth() - 12, 1));
 }
 
-function getStatisticsRange(period: "spend" | "calendar", selectedMonth: string) {
+function getStatisticsRange(period: "spend" | "calendar", selectedMonth: string, spendMonthStartDay = 4) {
   const [year, month] = selectedMonth.split("-").map(Number);
-  const start = new Date(year, month - 1, period === "spend" ? 4 : 1);
+  const startDay = Math.min(spendMonthStartDay, new Date(year, month, 0).getDate());
+  const start = new Date(year, month - 1, period === "spend" ? startDay : 1);
+  const nextStartDay = Math.min(spendMonthStartDay, new Date(year, month + 1, 0).getDate());
+  const nextCycleStart = new Date(year, month, nextStartDay);
   const end = period === "calendar"
     ? new Date(year, month, 0)
-    : new Date(year, month, 3);
+    : new Date(nextCycleStart.getFullYear(), nextCycleStart.getMonth(), nextCycleStart.getDate() - 1);
   const formatDate = (date: Date) => date.toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
@@ -445,6 +456,7 @@ export default function App() {
   const [incomeDisplay, setIncomeDisplay] = useState<"expendable" | "total">("expendable");
   const [statisticsPeriod, setStatisticsPeriod] = useState<"spend" | "calendar">("spend");
   const [selectedOverviewMonth, setSelectedOverviewMonth] = useState(() => getCurrentSpendMonth());
+  const [spendMonthStartDay, setSpendMonthStartDay] = useState(4);
   const [monthHistoryStart, setMonthHistoryStart] = useState(() => getInitialMonthHistoryStart());
   const [monthPickerOpen, setMonthPickerOpen] = useState(false);
   const [transactionTab, setTransactionTab] = useState<TransactionTabID>("depository");
@@ -488,6 +500,7 @@ export default function App() {
   const [metricsRefreshKey, setMetricsRefreshKey] = useState(0);
   const [financeSettings, setFinanceSettings] = useState<FinanceSettings | null>(null);
   const [financeSettingsLoading, setFinanceSettingsLoading] = useState(false);
+  const [spendMonthStartDaySelection, setSpendMonthStartDaySelection] = useState("4");
   const [expendableAccountSelection, setExpendableAccountSelection] = useState("");
   const [statementAccountSelection, setStatementAccountSelection] = useState("");
   const [statementDueDate, setStatementDueDate] = useState(() => transactionDateKey(new Date()));
@@ -640,9 +653,29 @@ export default function App() {
       });
   }, [refresh]);
 
+  useEffect(() => {
+    if (!profile) return;
+    let cancelled = false;
+    api<SpendMonthSettings>("/api/spend-month-settings")
+      .then(({ start_day }) => {
+        if (!Number.isInteger(start_day) || start_day < 1 || start_day > 31) {
+          throw new Error("The configured spend month start day is invalid.");
+        }
+        if (cancelled) return;
+        setSpendMonthStartDay(start_day);
+        setSelectedOverviewMonth(getCurrentSpendMonth(new Date(), start_day));
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Could not load spend month settings");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [profile?.id]);
+
   const statisticsRange = useMemo(
-    () => getStatisticsRange(statisticsPeriod, selectedOverviewMonth),
-    [selectedOverviewMonth, statisticsPeriod],
+    () => getStatisticsRange(statisticsPeriod, selectedOverviewMonth, spendMonthStartDay),
+    [selectedOverviewMonth, spendMonthStartDay, statisticsPeriod],
   );
   useEffect(() => {
     if (!profile) return;
@@ -668,7 +701,7 @@ export default function App() {
     if (!profile) return;
     let cancelled = false;
     setLiquidityLoading(true);
-    const params = new URLSearchParams({ spend_month: getCurrentSpendMonth() });
+    const params = new URLSearchParams({ spend_month: getCurrentSpendMonth(new Date(), spendMonthStartDay) });
     api<DashboardLiquidity>(`/api/dashboard/liquidity?${params.toString()}`)
       .then((liquidity) => {
         if (!cancelled) setDashboardLiquidity(liquidity);
@@ -682,13 +715,13 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [excludedLiquidityTransactions, excludedSpendCategories, metricsRefreshKey, profile]);
+  }, [excludedLiquidityTransactions, excludedSpendCategories, metricsRefreshKey, profile, spendMonthStartDay]);
 
   useEffect(() => {
     if (!profile || activePage !== "overview") return;
     let cancelled = false;
     setSubscriptionTrackerLoading(true);
-    const params = new URLSearchParams({ spend_month: getCurrentSpendMonth() });
+    const params = new URLSearchParams({ spend_month: getCurrentSpendMonth(new Date(), spendMonthStartDay) });
     api<SubscriptionTrackerData>(`/api/dashboard/subscription-tracker?${params.toString()}`)
       .then((data) => {
         if (!cancelled) setSubscriptionTracker(data);
@@ -702,7 +735,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [activePage, metricsRefreshKey, profile]);
+  }, [activePage, metricsRefreshKey, profile, spendMonthStartDay]);
 
   useEffect(() => {
     if (profile?.role !== "admin" || activePage !== "administration" || adminSection !== "finance") return;
@@ -712,6 +745,7 @@ export default function App() {
       .then((settings) => {
         if (cancelled) return;
         setFinanceSettings(settings);
+        setSpendMonthStartDaySelection(String(settings.spend_month_start_day));
         setExpendableAccountSelection(settings.expendable_cash_account_id ?? "");
         if (!statementAccountSelection) {
           setStatementAccountSelection(accounts.find((account) => account.type.toLowerCase() === "credit")?.account_id ?? "");
@@ -901,7 +935,7 @@ export default function App() {
     : activePage === "administration"
     ? "ADMINISTRATION"
     : activePage === "projections" ? "INCOME FORECAST" : "YOUR FINANCES";
-  const currentSpendMonth = getCurrentSpendMonth();
+  const currentSpendMonth = getCurrentSpendMonth(new Date(), spendMonthStartDay);
   const currentPeriodLabel = statisticsPeriod === "spend"
     ? selectedOverviewMonth === currentSpendMonth ? "THIS CYCLE" : "SPEND CYCLE"
     : selectedOverviewMonth === latestOverviewMonth ? "THIS MONTH" : "SELECTED MONTH";
@@ -1178,6 +1212,31 @@ export default function App() {
       setMetricsRefreshKey((current) => current + 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save the expendable cash account");
+    }
+  }
+
+  async function saveSpendMonthStartDay(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    setNotice("");
+    const startDay = Number(spendMonthStartDaySelection);
+    if (!Number.isInteger(startDay) || startDay < 1 || startDay > 31) {
+      setError("Spend month start day must be between 1 and 31.");
+      return;
+    }
+    try {
+      await api("/api/admin/finance-settings/spend-month", {
+        method: "PUT",
+        body: JSON.stringify({ start_day: startDay }),
+      });
+      setSpendMonthStartDay(startDay);
+      setSelectedOverviewMonth(getCurrentSpendMonth(new Date(), startDay));
+      setFinanceSettings((current) => current ? { ...current, spend_month_start_day: startDay } : current);
+      setMetricsRefreshKey((current) => current + 1);
+      setProjectionRefreshKey((current) => current + 1);
+      setNotice("Spend month start day saved. Dashboard and projection calculations now use the updated calendar.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save the spend month start day");
     }
   }
 
@@ -1632,6 +1691,8 @@ export default function App() {
       setTransactions([]);
       setTransactionCategories([]);
       setFinanceSettings(null);
+      setSpendMonthStartDay(4);
+      setSpendMonthStartDaySelection("4");
       setProjectionData(null);
       setProjectionPayAmount("");
       setProjectionPaydayAnchor("");
@@ -1900,7 +1961,7 @@ export default function App() {
 
       <section className="panel projections-panel">
         <div className="panel-heading">
-          <div><h2>Projected expendable income</h2><p>Automatic take-home pay forecast by spend cycle (4th–3rd), including the current cycle and the next 12.</p></div>
+          <div><h2>Projected expendable income</h2><p>Automatic take-home pay forecast by configured spend month, including the current cycle and the next 12.</p></div>
           {profile?.role === "admin" && (
             <div className="projection-drawer-actions">
               <button
@@ -2309,7 +2370,7 @@ export default function App() {
               <header className="liquidity-transactions-heading">
                 <div>
                   <h2 id="liquidity-transactions-title">{liquidityTransactionsDialog.category}</h2>
-                  <p>{getStatisticsRange("spend", liquidityTransactionsDialog.spendMonth).label} · {liquidityTransactionsDialog.loading ? "Loading transactions…" : `${liquidityTransactionsDialog.transactions.length} transaction${liquidityTransactionsDialog.transactions.length === 1 ? "" : "s"}`}</p>
+                  <p>{getStatisticsRange("spend", liquidityTransactionsDialog.spendMonth, spendMonthStartDay).label} · {liquidityTransactionsDialog.loading ? "Loading transactions…" : `${liquidityTransactionsDialog.transactions.length} transaction${liquidityTransactionsDialog.transactions.length === 1 ? "" : "s"}`}</p>
                 </div>
                 <button type="button" className="preferences-drawer-close" aria-label="Close category transactions" onClick={() => setLiquidityTransactionsDialog(null)}>
                   <X size={18} />
@@ -2379,6 +2440,29 @@ export default function App() {
                 </>
               ) : (
                 <>
+                  <section className="panel settings-panel">
+                    <div className="panel-heading">
+                      <div><h2>Spend month calendar</h2><p>Choose the recurring day when each spend month begins. This updates Overview statistics, liquidity assignments, scheduled payments, and income projections for every profile.</p></div>
+                    </div>
+                    {financeSettingsLoading || !financeSettings ? (
+                      <div className="empty-state compact">{financeSettingsLoading ? "Loading finance settings…" : "Finance settings are unavailable."}</div>
+                    ) : (
+                      <form className="profile-form finance-form" onSubmit={saveSpendMonthStartDay}>
+                        <label>Spend month starts on day
+                          <input
+                            type="number"
+                            min="1"
+                            max="31"
+                            value={spendMonthStartDaySelection}
+                            onChange={(event) => setSpendMonthStartDaySelection(event.target.value)}
+                            required
+                          />
+                        </label>
+                        <button className="secondary-button" type="submit">Save spend calendar</button>
+                        <p className="finance-help">The default is the 4th. Days 29–31 use the last day of shorter months.</p>
+                      </form>
+                    )}
+                  </section>
                   <section className="panel settings-panel">
                     <div className="panel-heading">
                       <div><h2>Overview balance settings</h2><p>Choose the cash account shown as the current expendable balance on every profile’s Overview.</p></div>
@@ -2696,7 +2780,7 @@ export default function App() {
                 <div className="statistics-period-control">
                   <div className="statistics-period-copy">
                     <strong>Statistics period</strong>
-                    <span>{statisticsPeriod === "spend" ? "Spend calendar (4th–3rd)" : "Calendar month"} · {statisticsRange.label}</span>
+                    <span>{statisticsPeriod === "spend" ? `Spend calendar (starts on day ${spendMonthStartDay})` : "Calendar month"} · {statisticsRange.label}</span>
                   </div>
                   <div className="statistics-period-options" role="group" aria-label="Statistics period">
                     <button
@@ -2788,6 +2872,7 @@ export default function App() {
                     <SpendingPieChart
                       key={liquidityMonth.spend_month}
                       month={{ ...liquidityMonth, scheduled_expense_total: scheduledExpenseTotal }}
+                      spendMonthStartDay={spendMonthStartDay}
                       canGoPrevious={monthIndex > 0}
                       canGoNext={monthIndex < dashboardLiquidity.months.length - 1}
                       onPrevious={() => setSelectedLiquidityMonthIndex((index) => Math.max(0, index - 1))}

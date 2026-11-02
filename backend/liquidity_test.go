@@ -24,6 +24,28 @@ func TestTransactionSpendMonthForCashUsesTransactionDate(t *testing.T) {
 	}
 }
 
+func TestTransactionSpendMonthForCashUsesConfiguredStartDay(t *testing.T) {
+	for _, test := range []struct {
+		date  string
+		start int
+		want  string
+	}{
+		{date: "2026-10-09", start: 10, want: "2026-09"},
+		{date: "2026-10-10", start: 10, want: "2026-10"},
+		{date: "2026-02-27", start: 31, want: "2026-01"},
+		{date: "2026-02-28", start: 31, want: "2026-02"},
+	} {
+		date, err := time.Parse("2006-01-02", test.date)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, included := transactionSpendMonthOn(date, "depository", nil, nil, test.start)
+		if !included || got != test.want {
+			t.Errorf("transactionSpendMonthOn(%s, depository, %d) = %q, %t; want %q, true", test.date, test.start, got, included, test.want)
+		}
+	}
+}
+
 func TestTransactionSpendMonthForCreditUsesStatementDueDate(t *testing.T) {
 	closeDay, dueDay := int16(3), int16(1)
 	for _, test := range []struct {

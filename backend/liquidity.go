@@ -48,6 +48,12 @@ func (a *app) getDashboardLiquidityTransactions(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, "category is required")
 		return
 	}
+	spendMonthStartDay, err := a.getSpendMonthStartDay(r.Context())
+	if err != nil {
+		log.Printf("read spend month start day: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load spend category transactions")
+		return
+	}
 
 	var encodedPreferences []byte
 	user := currentPrincipal(r)
@@ -110,7 +116,7 @@ func (a *app) getDashboardLiquidityTransactions(w http.ResponseWriter, r *http.R
 			writeError(w, http.StatusInternalServerError, "could not load spend category transactions")
 			return
 		}
-		spendMonth, included := transactionSpendMonth(date, accountType, closeDay, dueDay)
+		spendMonth, included := transactionSpendMonthOn(date, accountType, closeDay, dueDay, spendMonthStartDay)
 		if !included || spendMonth != monthKey {
 			continue
 		}
@@ -138,6 +144,12 @@ func (a *app) getDashboardLiquidity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	startMonth = time.Date(startMonth.Year(), startMonth.Month(), 1, 0, 0, 0, 0, time.UTC)
+	spendMonthStartDay, err := a.getSpendMonthStartDay(r.Context())
+	if err != nil {
+		log.Printf("read spend month start day: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load dashboard liquidity")
+		return
+	}
 	targetMonths := make(map[string]int, 3)
 	response := dashboardLiquidity{
 		Months:                     make([]liquiditySpendMonth, 3),
@@ -253,7 +265,7 @@ func (a *app) getDashboardLiquidity(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "could not load dashboard liquidity")
 			return
 		}
-		spendMonth, included := transactionSpendMonth(date, accountType, closeDay, dueDay)
+		spendMonth, included := transactionSpendMonthOn(date, accountType, closeDay, dueDay, spendMonthStartDay)
 		if !included {
 			continue
 		}
@@ -290,9 +302,13 @@ func (a *app) getDashboardLiquidity(w http.ResponseWriter, r *http.Request) {
 }
 
 func transactionSpendMonth(date time.Time, accountType string, closeDay, dueDay *int16) (string, bool) {
+	return transactionSpendMonthOn(date, accountType, closeDay, dueDay, 4)
+}
+
+func transactionSpendMonthOn(date time.Time, accountType string, closeDay, dueDay *int16, spendMonthStartDay int) (string, bool) {
 	switch accountType {
 	case "depository":
-		return spendMonthForDate(date).Format("2006-01"), true
+		return spendMonthForDateOn(date, spendMonthStartDay).Format("2006-01"), true
 	case "credit":
 		if closeDay == nil || dueDay == nil || *closeDay < 1 || *closeDay > 31 || *dueDay < 1 || *dueDay > 31 {
 			return "", false
@@ -307,18 +323,27 @@ func transactionSpendMonth(date time.Time, accountType string, closeDay, dueDay 
 			nextMonth := closeDate.AddDate(0, 1, 0)
 			dueDate = dayInMonth(nextMonth.Year(), nextMonth.Month(), int(*dueDay))
 		}
-		return spendMonthForDate(dueDate).Format("2006-01"), true
+		return spendMonthForDateOn(dueDate, spendMonthStartDay).Format("2006-01"), true
 	default:
 		return "", false
 	}
 }
 
 func spendMonthForDate(date time.Time) time.Time {
-	month := time.Date(date.Year(), date.Month(), 1, 0, 0, 0, 0, time.UTC)
-	if date.Day() < 4 {
-		return month.AddDate(0, -1, 0)
+	return spendMonthForDateOn(date, 4)
+}
+
+func spendMonthForDateOn(date time.Time, spendMonthStartDay int) time.Time {
+	start := spendMonthStart(date, spendMonthStartDay)
+	if dateOnly(date).Before(start) {
+		previousMonth := time.Date(date.Year(), date.Month()-1, 1, 0, 0, 0, 0, time.UTC)
+		return spendMonthStart(previousMonth, spendMonthStartDay)
 	}
-	return month
+	return start
+}
+
+func spendMonthStart(month time.Time, spendMonthStartDay int) time.Time {
+	return dayInMonth(month.Year(), month.Month(), spendMonthStartDay)
 }
 
 func dayInMonth(year int, month time.Month, day int) time.Time {

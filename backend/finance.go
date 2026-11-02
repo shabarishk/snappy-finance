@@ -44,7 +44,13 @@ func (a *app) getDashboardMetrics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid spend month")
 		return
 	}
-	periodStart := time.Date(month.Year(), month.Month(), 4, 0, 0, 0, 0, time.UTC)
+	spendMonthStartDay, err := a.getSpendMonthStartDay(r.Context())
+	if err != nil {
+		log.Printf("read spend month start day: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load dashboard finance metrics")
+		return
+	}
+	periodStart := spendMonthStart(month, spendMonthStartDay)
 
 	var result dashboardMetrics
 	var hasStatementData bool
@@ -90,13 +96,31 @@ func (a *app) getDashboardMetrics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load dashboard finance metrics")
 		return
 	}
-	result.ProjectedExpendableIncome, err = a.projectedIncomeForPeriod(r.Context(), periodStart, dateOnly(today))
+	result.ProjectedExpendableIncome, err = a.projectedIncomeForPeriod(r.Context(), periodStart, dateOnly(today), spendMonthStartDay)
 	if err != nil {
 		log.Printf("calculate dashboard projected income: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not load dashboard finance metrics")
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (a *app) getSpendMonthSettings(w http.ResponseWriter, r *http.Request) {
+	startDay, err := a.getSpendMonthStartDay(r.Context())
+	if err != nil {
+		log.Printf("read spend month settings: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load spend month settings")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"start_day": startDay})
+}
+
+func (a *app) getSpendMonthStartDay(ctx context.Context) (int, error) {
+	var startDay int
+	err := a.db.QueryRow(ctx,
+		"SELECT spend_month_start_day FROM finance_settings WHERE setting_id = 1",
+	).Scan(&startDay)
+	return startDay, err
 }
 
 func (a *app) getFinanceSettings(w http.ResponseWriter, r *http.Request) {
@@ -107,14 +131,15 @@ func (a *app) getFinanceSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var response struct {
+		SpendMonthStartDay      int                   `json:"spend_month_start_day"`
 		ExpendableCashAccountID *string               `json:"expendable_cash_account_id"`
 		ManualStatements        []creditCardStatement `json:"manual_statements"`
 		PlaidStatements         []creditCardStatement `json:"plaid_statements"`
 	}
 	err := a.db.QueryRow(r.Context(), `
-		SELECT expendable_cash_account_id
+		SELECT expendable_cash_account_id, spend_month_start_day
 		FROM finance_settings WHERE setting_id = 1`,
-	).Scan(&response.ExpendableCashAccountID)
+	).Scan(&response.ExpendableCashAccountID, &response.SpendMonthStartDay)
 	if err != nil {
 		log.Printf("read financial management settings: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not load financial management settings")
@@ -163,6 +188,29 @@ func (a *app) getFinanceSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func (a *app) setSpendMonthStartDay(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		StartDay int `json:"start_day"`
+	}
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON request")
+		return
+	}
+	if input.StartDay < 1 || input.StartDay > 31 {
+		writeError(w, http.StatusBadRequest, "spend month start day must be between 1 and 31")
+		return
+	}
+	if _, err := a.db.Exec(r.Context(), `
+		UPDATE finance_settings
+		SET spend_month_start_day = $1, updated_at = NOW()
+		WHERE setting_id = 1`, input.StartDay); err != nil {
+		log.Printf("save spend month start day: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not save spend month start day")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"saved": true})
 }
 
 func (a *app) setExpendableCashAccount(w http.ResponseWriter, r *http.Request) {
@@ -323,10 +371,22 @@ func (a *app) deleteCreditCardStatement(w http.ResponseWriter, r *http.Request) 
 }
 
 func (a *app) freezeExpiredProjectedIncome(ctx context.Context) error {
-	_, err := a.db.Exec(ctx, `
+	startDay, err := a.getSpendMonthStartDay(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = a.db.Exec(ctx, `
 		UPDATE projected_expendable_income
 		SET frozen_at = NOW()
 		WHERE frozen_at IS NULL
-		  AND period_start + INTERVAL '1 month' - INTERVAL '1 day' < CURRENT_DATE`)
+		  AND (
+		      (date_trunc('month', period_start) + INTERVAL '1 month')::date
+		      + LEAST(
+		          $1,
+		          EXTRACT(DAY FROM (
+		              date_trunc('month', period_start) + INTERVAL '2 months' - INTERVAL '1 day'
+		          ))::int
+		      ) - 2
+		  ) < CURRENT_DATE`, startDay)
 	return err
 }
