@@ -208,6 +208,7 @@ type ImportedStatementSummary = {
   account_name: string;
   parser_id: string;
   review_status: "pending_review" | "approved" | "rejected";
+  reprocessed?: boolean;
   period_start: string;
   period_end: string;
   imported_at: string;
@@ -1291,11 +1292,12 @@ export default function App() {
       setStatementUploadPeriodEnd("");
       setExpandedStatementID(imported.statement_id);
       setNotice(
-        `Statement processed. Review its spreadsheet preview and approve or reject it. ` +
+        `${imported.reprocessed ? "Statement reprocessed and reset to awaiting review." : "Statement processed."} ` +
+        `Review its spreadsheet preview and approve or reject it. ` +
         `${imported.transaction_count} transactions: ${imported.matched_count} matched, ` +
         `${imported.statement_only_count + imported.plaid_only_count + imported.ambiguous_count + imported.ambiguous_plaid_count} discrepancies or ambiguous matches.`,
       );
-      await loadStatementDetails(imported.statement_id);
+      await loadStatementDetails(imported.statement_id, true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not import statement");
     } finally {
@@ -1303,14 +1305,14 @@ export default function App() {
     }
   }
 
-  async function loadStatementDetails(statementID: string) {
-    if (expandedStatementID === statementID) {
+  async function loadStatementDetails(statementID: string, forceReload = false) {
+    if (!forceReload && expandedStatementID === statementID) {
       setExpandedStatementID(null);
       return;
     }
     setExpandedStatementID(statementID);
     setStatementDetailError("");
-    if (statementDetails[statementID]) return;
+    if (!forceReload && statementDetails[statementID]) return;
     setStatementDetailLoadingID(statementID);
     try {
       const details = await api<ImportedStatementDetail>(`/api/statements/${encodeURIComponent(statementID)}`);

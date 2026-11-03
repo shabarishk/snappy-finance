@@ -65,6 +65,7 @@ type importedStatementSummary struct {
 	AccountName         string    `json:"account_name"`
 	ParserID            string    `json:"parser_id"`
 	ReviewStatus        string    `json:"review_status"`
+	Reprocessed         bool      `json:"reprocessed,omitempty"`
 	PeriodStart         string    `json:"period_start"`
 	PeriodEnd           string    `json:"period_end"`
 	ImportedAt          time.Time `json:"imported_at"`
@@ -358,6 +359,7 @@ func (a *app) uploadAccountStatement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
+	reprocessed := false
 	err = tx.QueryRow(r.Context(), `
 		INSERT INTO imported_statements (
 			statement_id, account_id, account_name, parser_id, period_start, period_end,
@@ -368,10 +370,45 @@ func (a *app) uploadAccountStatement(w http.ResponseWriter, r *http.Request) {
 		statementID, r.PathValue("accountID"), accountName, *parserID, periodStart, periodEnd, sourceHash, spreadsheet,
 	).Scan(&statementID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusConflict, "this PDF has already been imported for this account")
-		return
-	}
-	if err != nil {
+		err = tx.QueryRow(r.Context(), `
+			SELECT statement_id FROM imported_statements
+			WHERE account_id=$1 AND source_sha256=$2
+			FOR UPDATE`,
+			r.PathValue("accountID"), sourceHash,
+		).Scan(&statementID)
+		if err != nil {
+			log.Printf("load existing statement import for reprocessing: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not refresh the existing statement import")
+			return
+		}
+		if _, err := tx.Exec(r.Context(),
+			"DELETE FROM statement_import_transactions WHERE statement_id=$1",
+			statementID); err != nil {
+			log.Printf("delete old statement transaction rows: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not refresh the existing statement import")
+			return
+		}
+		if _, err := tx.Exec(r.Context(),
+			"DELETE FROM statement_reconciliation_issues WHERE statement_id=$1",
+			statementID); err != nil {
+			log.Printf("delete old statement reconciliation issues: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not refresh the existing statement import")
+			return
+		}
+		_, err = tx.Exec(r.Context(), `
+			UPDATE imported_statements
+			SET account_name=$1, parser_id=$2, period_start=$3, period_end=$4,
+			    spreadsheet=$5, review_status='pending_review', reviewed_at=NULL,
+			    reviewed_by=NULL, imported_at=NOW()
+			WHERE statement_id=$6`,
+			accountName, *parserID, periodStart, periodEnd, spreadsheet, statementID)
+		if err != nil {
+			log.Printf("update existing statement import: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not refresh the existing statement import")
+			return
+		}
+		reprocessed = true
+	} else if err != nil {
 		log.Printf("insert imported statement: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not save statement import")
 		return
@@ -431,7 +468,12 @@ func (a *app) uploadAccountStatement(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "statement was imported but its summary could not be loaded")
 		return
 	}
-	writeJSON(w, http.StatusCreated, summary)
+	summary.Reprocessed = reprocessed
+	statusCode := http.StatusCreated
+	if reprocessed {
+		statusCode = http.StatusOK
+	}
+	writeJSON(w, statusCode, summary)
 }
 
 func (a *app) reviewImportedStatement(w http.ResponseWriter, r *http.Request) {
