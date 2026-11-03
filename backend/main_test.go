@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/hmac"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -61,6 +62,35 @@ func TestNormalizeUsername(t *testing.T) {
 		if _, err := normalizeUsername(invalid); err == nil {
 			t.Errorf("normalizeUsername(%q) unexpectedly succeeded", invalid)
 		}
+	}
+}
+
+func TestParseTransactionDateRange(t *testing.T) {
+	tests := []struct {
+		name    string
+		query   string
+		from    string
+		to      string
+		wantErr bool
+	}{
+		{name: "empty range"},
+		{name: "from and to", query: "?from=2026-01-01&to=2026-01-31", from: "2026-01-01", to: "2026-01-31"},
+		{name: "from only", query: "?from=2026-01-01", from: "2026-01-01"},
+		{name: "to only", query: "?to=2026-01-31", to: "2026-01-31"},
+		{name: "invalid date", query: "?from=2026-02-30", wantErr: true},
+		{name: "reversed range", query: "?from=2026-02-01&to=2026-01-31", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest("GET", "/api/transactions"+test.query, nil)
+			from, to, err := parseTransactionDateRange(request)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("parseTransactionDateRange error = %v, wantErr %v", err, test.wantErr)
+			}
+			if err == nil && (from != test.from || to != test.to) {
+				t.Fatalf("date range = (%q, %q), want (%q, %q)", from, to, test.from, test.to)
+			}
+		})
 	}
 }
 

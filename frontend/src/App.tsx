@@ -463,6 +463,12 @@ export default function App() {
   const [monthPickerOpen, setMonthPickerOpen] = useState(false);
   const [transactionTab, setTransactionTab] = useState<TransactionTabID>("depository");
   const [selectedTransactionAccountIDs, setSelectedTransactionAccountIDs] = useState<string[] | null>(null);
+  const [transactionStartDate, setTransactionStartDate] = useState("");
+  const [transactionEndDate, setTransactionEndDate] = useState("");
+  const [dateRangeTransactions, setDateRangeTransactions] = useState<Transaction[] | null>(null);
+  const [dateRangeLoading, setDateRangeLoading] = useState(false);
+  const [dateRangeError, setDateRangeError] = useState("");
+  const [transactionRefreshKey, setTransactionRefreshKey] = useState(0);
   const [transactionPage, setTransactionPage] = useState(1);
   const [transactionPageSize, setTransactionPageSize] = useState(25);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -626,6 +632,7 @@ export default function App() {
       setTransactions(transactionRows);
       setTransactionCategories(categoryRows);
       setMetricsRefreshKey((current) => current + 1);
+      setTransactionRefreshKey((current) => current + 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load financial data");
     } finally {
@@ -884,10 +891,11 @@ export default function App() {
     () => new Map(accounts.map((account) => [account.account_id, account])),
     [accounts],
   );
+  const transactionRecords = dateRangeTransactions ?? transactions;
   const transactionTabs = useMemo(() => {
     const accountTypes = new Map(accounts.map((account) => [account.account_id, account.type.toLowerCase()]));
     const knownTypes = new Set(["depository", "credit", "loan"]);
-    const hasOtherTransactions = transactions.some((item) => !knownTypes.has(accountTypes.get(item.account_id) ?? ""));
+    const hasOtherTransactions = transactionRecords.some((item) => !knownTypes.has(accountTypes.get(item.account_id) ?? ""));
     const hasOtherAccounts = accounts.some((account) => !knownTypes.has(account.type.toLowerCase()));
     return [
       { id: "depository" as const, label: "Cash accounts" },
@@ -895,10 +903,51 @@ export default function App() {
       { id: "loan" as const, label: "Loan accounts" },
       ...(hasOtherTransactions || hasOtherAccounts ? [{ id: "other" as const, label: "Other accounts" }] : []),
     ];
-  }, [accounts, transactions]);
+  }, [accounts, transactionRecords]);
   const activeTransactionTab = transactionTabs.some((tab) => tab.id === transactionTab)
     ? transactionTab
     : "depository";
+  const invalidTransactionDateRange = transactionStartDate !== "" &&
+    transactionEndDate !== "" &&
+    transactionStartDate > transactionEndDate;
+  useEffect(() => {
+    if (transactionStartDate === "" && transactionEndDate === "") {
+      setDateRangeTransactions(null);
+      setDateRangeError("");
+      setDateRangeLoading(false);
+      return;
+    }
+    if (invalidTransactionDateRange) {
+      setDateRangeTransactions([]);
+      setDateRangeError("");
+      setDateRangeLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const params = new URLSearchParams();
+    if (transactionStartDate !== "") params.set("from", transactionStartDate);
+    if (transactionEndDate !== "") params.set("to", transactionEndDate);
+    setDateRangeTransactions([]);
+    setDateRangeError("");
+    setDateRangeLoading(true);
+    api<Transaction[]>(`/api/transactions?${params.toString()}`)
+      .then((rows) => {
+        if (!cancelled) setDateRangeTransactions(rows);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setDateRangeTransactions([]);
+          setDateRangeError(err instanceof Error ? err.message : "Could not load transactions for this date range");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setDateRangeLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [invalidTransactionDateRange, transactionEndDate, transactionRefreshKey, transactionStartDate]);
   const transactionAccounts = useMemo(
     () => accounts.filter((account) => activeTransactionTab === "other"
       ? !["depository", "credit", "loan"].includes(account.type.toLowerCase())
@@ -906,7 +955,7 @@ export default function App() {
     [accounts, activeTransactionTab],
   );
   const visibleTransactions = useMemo(() => {
-    return transactions.filter((item) => {
+    return transactionRecords.filter((item) => {
       const type = accountsByID.get(item.account_id)?.type.toLowerCase() ?? "";
       const matchesType = activeTransactionTab === "other"
         ? !["depository", "credit", "loan"].includes(type)
@@ -918,7 +967,21 @@ export default function App() {
           (item.amount > 0 && item.category_id !== null && selectedExpenseCategoryIDs.includes(item.category_id));
       return matchesType && matchesAccount && matchesCategory;
     });
-  }, [accountsByID, activeTransactionTab, selectedExpenseCategoryIDs, selectedTransactionAccountIDs, showOnlyUncategorizedTransactions, transactions]);
+  }, [accountsByID, activeTransactionTab, selectedExpenseCategoryIDs, selectedTransactionAccountIDs, showOnlyUncategorizedTransactions, transactionRecords]);
+  const transactionTotals = useMemo(() => {
+    const totalsByCurrency = new Map<string, { moneyIn: number; moneyOut: number }>();
+    visibleTransactions.forEach((item) => {
+      const currency = item.iso_currency_code || "USD";
+      const totals = totalsByCurrency.get(currency) ?? { moneyIn: 0, moneyOut: 0 };
+      if (item.amount < 0) {
+        totals.moneyIn += Math.abs(item.amount);
+      } else {
+        totals.moneyOut += item.amount;
+      }
+      totalsByCurrency.set(currency, totals);
+    });
+    return Array.from(totalsByCurrency, ([currency, totals]) => ({ currency, ...totals }));
+  }, [visibleTransactions]);
   const transactionPageCount = Math.max(1, Math.ceil(visibleTransactions.length / transactionPageSize));
   const currentTransactionPage = Math.min(transactionPage, transactionPageCount);
   const pageTransactions = useMemo(() => {
@@ -1121,6 +1184,11 @@ export default function App() {
           ? { ...transaction, hidden_from_users: hiddenFromUsers }
           : transaction,
       ));
+      setDateRangeTransactions((current) => current?.map((transaction) =>
+        transaction.transaction_id === item.transaction_id
+          ? { ...transaction, hidden_from_users: hiddenFromUsers }
+          : transaction,
+      ) ?? null);
       setNotice(hiddenFromUsers
         ? "Transaction hidden from household users."
         : "Transaction visible to household users.");
@@ -1163,6 +1231,11 @@ export default function App() {
           ? { ...transaction, category_id: result.category_id }
           : transaction,
       ));
+      setDateRangeTransactions((current) => current?.map((transaction) =>
+        matchedIDs.has(transaction.transaction_id)
+          ? { ...transaction, category_id: result.category_id }
+          : transaction,
+      ) ?? null);
       const label = transactionCategories.find((category) => category.category_id === categoryID)?.label;
       if (!categoryID) {
         setNotice("Using the bank category for this transaction. Similar transactions remain categorized automatically.");
@@ -1463,6 +1536,65 @@ export default function App() {
           ))}
         </div>
         <div className="transactions-content">
+          <div className="transaction-date-filters">
+            <label>
+              From
+              <input
+                type="date"
+                value={transactionStartDate}
+                max={transactionEndDate || undefined}
+                onChange={(event) => {
+                  setTransactionStartDate(event.target.value);
+                  setTransactionPage(1);
+                }}
+              />
+            </label>
+            <label>
+              To
+              <input
+                type="date"
+                value={transactionEndDate}
+                min={transactionStartDate || undefined}
+                onChange={(event) => {
+                  setTransactionEndDate(event.target.value);
+                  setTransactionPage(1);
+                }}
+              />
+            </label>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={transactionStartDate === "" && transactionEndDate === ""}
+              onClick={() => {
+                setTransactionStartDate("");
+                setTransactionEndDate("");
+                setTransactionPage(1);
+              }}
+            >Clear dates</button>
+          </div>
+          {invalidTransactionDateRange && (
+            <p className="transaction-date-error" role="alert">The end date must be on or after the start date.</p>
+          )}
+          {dateRangeError && <p className="transaction-date-error" role="alert">{dateRangeError}</p>}
+          <div className="transaction-totals" aria-live="polite">
+            <div>
+              <span>Money in</span>
+              <strong>{transactionTotals.length === 0
+                ? money(0)
+                : transactionTotals.map((total, index) => (
+                  <span key={total.currency}>{index > 0 ? " · " : ""}{money(total.moneyIn, total.currency)}</span>
+                ))}</strong>
+            </div>
+            <div>
+              <span>Money out</span>
+              <strong>{transactionTotals.length === 0
+                ? money(0)
+                : transactionTotals.map((total, index) => (
+                  <span key={total.currency}>{index > 0 ? " · " : ""}{money(total.moneyOut, total.currency)}</span>
+                ))}</strong>
+            </div>
+            <small>Based on matching transactions, not just the current page.</small>
+          </div>
           <div className="transaction-list-toolbar">
             <span>Showing {firstTransactionNumber}–{lastTransactionNumber} of {visibleTransactions.length}</span>
             <label className="page-size-control">
@@ -1481,13 +1613,17 @@ export default function App() {
               </select>
             </label>
           </div>
-          {loading ? <div className="empty-state">Loading transactions…</div> : visibleTransactions.length === 0 ? (
+          {loading || dateRangeLoading ? <div className="empty-state">Loading transactions…</div> : visibleTransactions.length === 0 ? (
             <div className="empty-state compact">
-              {transactions.length === 0
+              {dateRangeError
+                ? "Could not load transactions for this date range."
+                : invalidTransactionDateRange
+                ? "Choose an end date on or after the start date."
+                : transactions.length === 0 && transactionStartDate === "" && transactionEndDate === ""
                 ? "Transactions will appear here after your first account sync."
                 : selectedTransactionAccountIDs !== null && selectedTransactionAccountIDs.length === 0
                   ? "Select one or more accounts to see transactions."
-                  : selectedExpenseCategoryIDs.length > 0 || showOnlyUncategorizedTransactions
+                  : selectedExpenseCategoryIDs.length > 0 || showOnlyUncategorizedTransactions || transactionStartDate !== "" || transactionEndDate !== ""
                     ? "No transactions match the selected filters."
                   : `No transactions for ${transactionTabs.find((tab) => tab.id === activeTransactionTab)?.label.toLowerCase() ?? "this account type"} yet.`}
             </div>
@@ -1749,6 +1885,10 @@ export default function App() {
       setProfiles([]);
       setAccounts([]);
       setTransactions([]);
+      setDateRangeTransactions(null);
+      setTransactionStartDate("");
+      setTransactionEndDate("");
+      setDateRangeError("");
       setTransactionCategories([]);
       setFinanceSettings(null);
       setSpendMonthStartDay(4);

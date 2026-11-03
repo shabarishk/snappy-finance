@@ -459,16 +459,33 @@ func (a *app) listAccounts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) listTransactions(w http.ResponseWriter, r *http.Request) {
+	fromDate, toDate, err := parseTransactionDateRange(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	isAdmin := currentPrincipal(r).Role == "admin"
-	rows, err := a.db.Query(r.Context(), `
+	query := `
 		SELECT transaction_id, account_id, name, merchant_name, amount, transaction_date::text,
 		       pending, category_primary, category_detailed, iso_currency_code,
 		       CASE WHEN $1 THEN hidden_from_users ELSE FALSE END, category_id,
 		       category_match_key <> ''
 		FROM transactions
-		WHERE $1 OR NOT hidden_from_users
-		ORDER BY transaction_date DESC, transaction_id
-		LIMIT 500`, isAdmin)
+		WHERE ($1 OR NOT hidden_from_users)`
+	args := []any{isAdmin}
+	if fromDate != "" {
+		query += fmt.Sprintf(" AND transaction_date >= $%d::date", len(args)+1)
+		args = append(args, fromDate)
+	}
+	if toDate != "" {
+		query += fmt.Sprintf(" AND transaction_date <= $%d::date", len(args)+1)
+		args = append(args, toDate)
+	}
+	query += " ORDER BY transaction_date DESC, transaction_id"
+	if fromDate == "" && toDate == "" {
+		query += " LIMIT 500"
+	}
+	rows, err := a.db.Query(r.Context(), query, args...)
 	if err != nil {
 		log.Printf("query transactions: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not load transactions")
@@ -493,6 +510,25 @@ func (a *app) listTransactions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, transactions)
+}
+
+func parseTransactionDateRange(r *http.Request) (string, string, error) {
+	fromDate := r.URL.Query().Get("from")
+	toDate := r.URL.Query().Get("to")
+	if fromDate != "" {
+		if _, err := time.Parse("2006-01-02", fromDate); err != nil {
+			return "", "", errors.New("from must be a valid YYYY-MM-DD date")
+		}
+	}
+	if toDate != "" {
+		if _, err := time.Parse("2006-01-02", toDate); err != nil {
+			return "", "", errors.New("to must be a valid YYYY-MM-DD date")
+		}
+	}
+	if fromDate != "" && toDate != "" && fromDate > toDate {
+		return "", "", errors.New("from date must be on or before to date")
+	}
+	return fromDate, toDate, nil
 }
 
 func (a *app) updateTransactionVisibility(w http.ResponseWriter, r *http.Request) {
