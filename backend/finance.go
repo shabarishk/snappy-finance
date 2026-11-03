@@ -55,6 +55,33 @@ func (a *app) getDashboardMetrics(w http.ResponseWriter, r *http.Request) {
 	var result dashboardMetrics
 	var hasStatementData bool
 	err = a.db.QueryRow(r.Context(), `
+		WITH approved_statement_balances AS (
+			SELECT DISTINCT ON (statement.account_id, statement.payment_due_date)
+				statement.account_id, statement.payment_due_date AS due_date,
+				statement.statement_balance, 'statement'::text AS source
+			FROM imported_statements statement
+			JOIN accounts account ON account.account_id=statement.account_id AND account.type='credit'
+			WHERE statement.review_status='approved'
+			  AND statement.statement_balance IS NOT NULL
+			  AND statement.payment_due_date IS NOT NULL
+			ORDER BY statement.account_id, statement.payment_due_date,
+			         statement.reviewed_at DESC NULLS LAST, statement.imported_at DESC,
+			         statement.statement_id DESC
+		),
+		all_statement_balances AS (
+			SELECT account_id, due_date, statement_balance, source
+			FROM credit_card_statements
+			UNION ALL
+			SELECT account_id, due_date, statement_balance, source
+			FROM approved_statement_balances
+		),
+		selected_statement_balances AS (
+			SELECT DISTINCT ON (account_id, due_date) account_id, due_date, statement_balance
+			FROM all_statement_balances
+			WHERE due_date BETWEEN $1 AND $2
+			ORDER BY account_id, due_date,
+				CASE source WHEN 'plaid' THEN 0 WHEN 'statement' THEN 1 ELSE 2 END
+		)
 		SELECT
 			(SELECT account.current_balance
 			 FROM finance_settings settings
@@ -64,17 +91,25 @@ func (a *app) getDashboardMetrics(w http.ResponseWriter, r *http.Request) {
 			COALESCE((SELECT SUM(current_balance) FROM accounts WHERE type = 'credit'), 0),
 			CASE WHEN EXISTS (SELECT 1 FROM credit_card_statements) THEN
 				COALESCE((
-					SELECT SUM(statement_balance)
-					FROM (
-						SELECT DISTINCT ON (account_id, due_date) statement_balance
-						FROM credit_card_statements
-						WHERE due_date BETWEEN $1 AND $2
-						ORDER BY account_id, due_date,
-							CASE source WHEN 'plaid' THEN 0 ELSE 1 END
-					) selected_statements
+					SELECT SUM(statement_balance) FROM selected_statement_balances
 				), 0)
+			WHEN EXISTS (
+				SELECT 1
+				FROM imported_statements statement
+				JOIN accounts account ON account.account_id=statement.account_id AND account.type='credit'
+				WHERE statement.review_status='approved'
+				  AND statement.statement_balance IS NOT NULL
+				  AND statement.payment_due_date IS NOT NULL
+			) THEN COALESCE((SELECT SUM(statement_balance) FROM selected_statement_balances), 0)
 			ELSE NULL END,
-			EXISTS (SELECT 1 FROM credit_card_statements)`,
+			EXISTS (SELECT 1 FROM credit_card_statements) OR EXISTS (
+				SELECT 1
+				FROM imported_statements statement
+				JOIN accounts account ON account.account_id=statement.account_id AND account.type='credit'
+				WHERE statement.review_status='approved'
+				  AND statement.statement_balance IS NOT NULL
+				  AND statement.payment_due_date IS NOT NULL
+			)`,
 		start, end,
 	).Scan(
 		&result.CurrentExpendableBalance,
@@ -135,6 +170,7 @@ func (a *app) getFinanceSettings(w http.ResponseWriter, r *http.Request) {
 		ExpendableCashAccountID *string               `json:"expendable_cash_account_id"`
 		ManualStatements        []creditCardStatement `json:"manual_statements"`
 		PlaidStatements         []creditCardStatement `json:"plaid_statements"`
+		UploadedStatements      []creditCardStatement `json:"uploaded_statements"`
 	}
 	err := a.db.QueryRow(r.Context(), `
 		SELECT expendable_cash_account_id, spend_month_start_day
@@ -148,11 +184,24 @@ func (a *app) getFinanceSettings(w http.ResponseWriter, r *http.Request) {
 
 	response.ManualStatements = make([]creditCardStatement, 0)
 	response.PlaidStatements = make([]creditCardStatement, 0)
+	response.UploadedStatements = make([]creditCardStatement, 0)
 	rows, err := a.db.Query(r.Context(), `
 		SELECT statement.account_id, COALESCE(account.official_name, account.name),
 			statement.due_date, statement.statement_date, statement.statement_balance, statement.source
 		FROM credit_card_statements statement
 		JOIN accounts account ON account.account_id = statement.account_id
+		WHERE statement.source='plaid'
+		   OR (
+		       statement.source='manual'
+		       AND NOT EXISTS (
+		           SELECT 1
+		           FROM imported_statements uploaded
+		           WHERE uploaded.account_id=statement.account_id
+		             AND uploaded.payment_due_date=statement.due_date
+		             AND uploaded.review_status='approved'
+		             AND uploaded.statement_balance IS NOT NULL
+		       )
+		   )
 		ORDER BY statement.due_date DESC, account.name`)
 	if err != nil {
 		log.Printf("read credit card statements: %v", err)
@@ -177,7 +226,7 @@ func (a *app) getFinanceSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if source == "plaid" {
 			response.PlaidStatements = append(response.PlaidStatements, statement)
-		} else {
+		} else if source == "manual" {
 			response.ManualStatements = append(response.ManualStatements, statement)
 		}
 	}
@@ -185,6 +234,45 @@ func (a *app) getFinanceSettings(w http.ResponseWriter, r *http.Request) {
 	if err := rows.Err(); err != nil {
 		log.Printf("read credit card statements: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not load credit card statements")
+		return
+	}
+	rows, err = a.db.Query(r.Context(), `
+		SELECT DISTINCT ON (statement.account_id, statement.payment_due_date)
+			statement.account_id, COALESCE(account.official_name, account.name),
+			statement.payment_due_date, statement.period_end, statement.statement_balance
+		FROM imported_statements statement
+		JOIN accounts account ON account.account_id=statement.account_id AND account.type='credit'
+		WHERE statement.review_status='approved'
+		  AND statement.statement_balance IS NOT NULL
+		  AND statement.payment_due_date IS NOT NULL
+		ORDER BY statement.account_id, statement.payment_due_date,
+		         statement.reviewed_at DESC NULLS LAST, statement.imported_at DESC,
+		         statement.statement_id DESC`)
+	if err != nil {
+		log.Printf("read uploaded credit card statements: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load uploaded statement balances")
+		return
+	}
+	for rows.Next() {
+		var statement creditCardStatement
+		if err := rows.Scan(
+			&statement.AccountID,
+			&statement.AccountName,
+			&statement.DueDate,
+			&statement.StatementDate,
+			&statement.StatementBalance,
+		); err != nil {
+			rows.Close()
+			log.Printf("scan uploaded credit card statement: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not load uploaded statement balances")
+			return
+		}
+		response.UploadedStatements = append(response.UploadedStatements, statement)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		log.Printf("read uploaded credit card statements: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load uploaded statement balances")
 		return
 	}
 	writeJSON(w, http.StatusOK, response)

@@ -52,6 +52,7 @@ type FinanceSettings = {
   expendable_cash_account_id: string | null;
   manual_statements: ManualCreditStatement[];
   plaid_statements: ManualCreditStatement[];
+  uploaded_statements: ManualCreditStatement[];
 };
 
 type SpendMonthSettings = {
@@ -195,6 +196,7 @@ type Transaction = {
   hidden_from_users?: boolean;
   category_id: string | null;
   has_category_match: boolean;
+  is_statement_import?: boolean;
 };
 
 type StatementParser = {
@@ -211,6 +213,8 @@ type ImportedStatementSummary = {
   reprocessed?: boolean;
   period_start: string;
   period_end: string;
+  statement_balance: number | null;
+  payment_due_date?: string;
   imported_at: string;
   transaction_count: number;
   matched_count: number;
@@ -230,6 +234,14 @@ type StatementImportTransaction = {
   matched_plaid_date: string | null;
   matched_plaid_merchant: string | null;
   matched_plaid_amount: number | null;
+  candidates: StatementPlaidCandidate[];
+};
+
+type StatementPlaidCandidate = {
+  transaction_id: string;
+  date: string;
+  merchant: string;
+  amount: number;
 };
 
 type StatementDiscrepancy = {
@@ -550,6 +562,8 @@ export default function App() {
   const [expandedStatementID, setExpandedStatementID] = useState<string | null>(null);
   const [statementDetailLoadingID, setStatementDetailLoadingID] = useState<string | null>(null);
   const [statementDetailError, setStatementDetailError] = useState("");
+  const [statementMatchSelections, setStatementMatchSelections] = useState<Record<number, string>>({});
+  const [matchingStatementTransactionID, setMatchingStatementTransactionID] = useState<number | null>(null);
   const [statementUploadAccountID, setStatementUploadAccountID] = useState("");
   const [statementUploadFile, setStatementUploadFile] = useState<File | null>(null);
   const [statementUploadPeriodStart, setStatementUploadPeriodStart] = useState("");
@@ -1317,6 +1331,9 @@ export default function App() {
     try {
       const details = await api<ImportedStatementDetail>(`/api/statements/${encodeURIComponent(statementID)}`);
       setStatementDetails((current) => ({ ...current, [statementID]: details }));
+      setStatementImports((current) => current.map((statement) =>
+        statement.statement_id === statementID ? details.statement : statement,
+      ));
     } catch (err) {
       setStatementDetailError(err instanceof Error ? err.message : "Could not load statement reconciliation");
     } finally {
@@ -1367,11 +1384,48 @@ export default function App() {
           ? { ...current, [statementID]: { ...detail, statement: reviewed } }
           : current;
       });
-      setNotice(`Statement ${decision}.`);
+      setMetricsRefreshKey((current) => current + 1);
+      if (decision === "approved" && reviewed.statement_balance !== null && reviewed.statement_balance !== undefined && reviewed.payment_due_date) {
+        setNotice(
+          `Statement approved. Its ${money(reviewed.statement_balance)} balance due ${displayDate(reviewed.payment_due_date)} now takes precedence over any manual entry for that due date.`,
+        );
+      } else if (decision === "approved" && reviewed.statement_balance !== null && reviewed.statement_balance !== undefined) {
+        setNotice("Statement approved, but its payment due date was not detected, so its balance was not added to Financial Management.");
+      } else {
+        setNotice(`Statement ${decision}.`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save statement review");
     } finally {
       setReviewingStatementID(null);
+    }
+  }
+
+  async function matchStatementTransaction(statementID: string, statementTransactionID: number) {
+    const plaidTransactionID = statementMatchSelections[statementTransactionID];
+    if (!plaidTransactionID) {
+      setError("Choose a Plaid transaction to match.");
+      return;
+    }
+    setMatchingStatementTransactionID(statementTransactionID);
+    setError("");
+    setNotice("");
+    try {
+      await api(`/api/admin/statements/${encodeURIComponent(statementID)}/transactions/${statementTransactionID}/match`, {
+        method: "PATCH",
+        body: JSON.stringify({ plaid_transaction_id: plaidTransactionID }),
+      });
+      setStatementMatchSelections((current) => {
+        const next = { ...current };
+        delete next[statementTransactionID];
+        return next;
+      });
+      setNotice("Statement transaction matched to Plaid; both merchant descriptions were saved.");
+      await loadStatementDetails(statementID, true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not match statement transaction");
+    } finally {
+      setMatchingStatementTransactionID(null);
     }
   }
 
@@ -1840,9 +1894,9 @@ export default function App() {
               {pageTransactions.map((item) => (
                 <div className={`transaction-row ${item.hidden_from_users ? "hidden-transaction" : ""}`} key={item.transaction_id}>
                   <span className={`transaction-icon ${item.amount < 0 ? "income-icon" : ""}`}>{item.amount < 0 ? <ArrowDownLeft size={17} /> : <ArrowUpRight size={17} />}</span>
-                  <div className="transaction-info"><strong>{item.merchant_name || item.name}</strong><span>{transactionCategories.find((category) => category.category_id === item.category_id)?.label || item.category_detailed || item.category_primary || "Uncategorized"} · {new Date(`${item.date}T12:00:00`).toLocaleDateString()} · {accountsByID.get(item.account_id)?.official_name || accountsByID.get(item.account_id)?.name || "Unknown account"}</span></div>
+                  <div className="transaction-info"><strong>{item.merchant_name || item.name}</strong><span>{transactionCategories.find((category) => category.category_id === item.category_id)?.label || item.category_detailed || item.category_primary || "Uncategorized"} · {new Date(`${item.date}T12:00:00`).toLocaleDateString()} · {accountsByID.get(item.account_id)?.official_name || accountsByID.get(item.account_id)?.name || "Unknown account"}{item.is_statement_import ? " · Statement history" : ""}</span></div>
                   <strong className={item.amount < 0 ? "positive-text" : ""}>{item.amount < 0 ? "+" : "−"}{money(Math.abs(item.amount), item.iso_currency_code)}{item.pending && <small className="pending"> Pending</small>}</strong>
-                  {(profile?.role === "admin" || (item.amount > 0 && ["depository", "credit"].includes(accountsByID.get(item.account_id)?.type.toLowerCase() ?? ""))) && (
+                  {!item.is_statement_import && (profile?.role === "admin" || (item.amount > 0 && ["depository", "credit"].includes(accountsByID.get(item.account_id)?.type.toLowerCase() ?? ""))) && (
                     <div className="transaction-actions">
                       {item.amount > 0 && ["depository", "credit"].includes(accountsByID.get(item.account_id)?.type.toLowerCase() ?? "") && (
                         <label className="transaction-liquidity-toggle" title="Only affects your liquidity chart and forecast">
@@ -1943,6 +1997,11 @@ export default function App() {
                   {statement.plaid_only_count > 0 && <span className="statement-discrepancy-count">{statement.plaid_only_count} Plaid-only</span>}
                   {statement.ambiguous_count + statement.ambiguous_plaid_count > 0 && <span className="statement-ambiguous-count">{statement.ambiguous_count + statement.ambiguous_plaid_count} ambiguous</span>}
                 </div>
+                <p className="statement-balance-review">
+                  {statement.statement_balance !== null && statement.statement_balance !== undefined
+                    ? `Detected statement balance ${money(statement.statement_balance)}${statement.payment_due_date ? ` due ${displayDate(statement.payment_due_date)}` : "; payment due date not detected, so this balance will not be added to Financial Management"}. ${statement.review_status === "approved" && statement.payment_due_date ? "This approved balance is used in Financial Management and overrides a manual entry for the same due date." : statement.review_status === "pending_review" && statement.payment_due_date ? "Approving this statement will apply the balance and override any manual entry for the same due date." : ""}`
+                    : "No statement balance was detected; approving this statement will not change Financial Management balances."}
+                </p>
                 {expanded && (
                   <div className="statement-import-details">
                     {statementDetailLoadingID === statement.statement_id ? (
@@ -1975,6 +2034,33 @@ export default function App() {
                                 <span>{displayDate(transaction.date)} · {transaction.match_status === "matched"
                                   ? `Matched to ${transaction.matched_plaid_merchant || "Plaid transaction"} on ${transaction.matched_plaid_date ? displayDate(transaction.matched_plaid_date) : "unknown date"}`
                                   : transaction.match_status === "ambiguous" ? "Multiple possible Plaid matches" : "No matching Plaid transaction"}</span>
+                                {statement.review_status === "pending_review" && transaction.match_status !== "matched" && transaction.candidates.length > 0 && (
+                                  <div className="statement-manual-match">
+                                    <label>
+                                      Match to Plaid transaction
+                                      <select
+                                        value={statementMatchSelections[transaction.statement_transaction_id] ?? ""}
+                                        onChange={(event) => setStatementMatchSelections((current) => ({
+                                          ...current,
+                                          [transaction.statement_transaction_id]: event.target.value,
+                                        }))}
+                                      >
+                                        <option value="">Select a transaction</option>
+                                        {transaction.candidates.map((candidate) => (
+                                          <option key={candidate.transaction_id} value={candidate.transaction_id}>
+                                            {candidate.merchant} · {displayDate(candidate.date)} · {money(Math.abs(candidate.amount))}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </label>
+                                    <button
+                                      type="button"
+                                      className="secondary-button"
+                                      disabled={!statementMatchSelections[transaction.statement_transaction_id] || matchingStatementTransactionID !== null}
+                                      onClick={() => void matchStatementTransaction(statement.statement_id, transaction.statement_transaction_id)}
+                                    >{matchingStatementTransactionID === transaction.statement_transaction_id ? "Matching…" : "Match"}</button>
+                                  </div>
+                                )}
                               </div>
                               <strong>{money(transaction.amount)}</strong>
                             </div>
@@ -3122,7 +3208,7 @@ export default function App() {
 
                   <section className="panel settings-panel">
                     <div className="panel-heading">
-                      <div><h2>Credit card statement balances</h2><p>Plaid statement data is used where available; enter statements manually when it is not.</p></div>
+                      <div><h2>Credit card statement balances</h2><p>Approved PDF statement balances take precedence over manual entries for the same due date. Plaid data is used where available.</p></div>
                     </div>
                     <form className="profile-form finance-form" onSubmit={saveManualStatement}>
                       <label>Credit account
@@ -3150,6 +3236,18 @@ export default function App() {
                           <strong>{money(statement.statement_balance)}</strong>
                         </div>
                       )) : <p className="finance-help">No statement balances have been retrieved from Plaid yet.</p>}
+                    </div>
+                    <div className="manual-statement-list">
+                      <h3>Uploaded statement balances</h3>
+                      {financeSettings?.uploaded_statements.length ? financeSettings.uploaded_statements.map((statement) => (
+                        <div className="manual-statement-row" key={`${statement.account_id}-${statement.due_date}`}>
+                          <div>
+                            <strong>{statement.account_name}</strong>
+                            <span>{statement.statement_date ? `Statement ${new Date(`${statement.statement_date.slice(0, 10)}T00:00:00`).toLocaleDateString()} · ` : ""}Due {new Date(`${statement.due_date.slice(0, 10)}T00:00:00`).toLocaleDateString()}</span>
+                          </div>
+                          <strong>{money(statement.statement_balance)}</strong>
+                        </div>
+                      )) : <p className="finance-help">No approved PDF statement balances yet.</p>}
                     </div>
                     <div className="manual-statement-list">
                       <h3>Manual entries</h3>

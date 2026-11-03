@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,9 +37,11 @@ var bundledStatementParsers = []statementParser{
 }
 
 type parsedStatement struct {
-	PeriodStart  *string                      `json:"period_start"`
-	PeriodEnd    *string                      `json:"period_end"`
-	Transactions []parsedStatementTransaction `json:"transactions"`
+	PeriodStart      *string                      `json:"period_start"`
+	PeriodEnd        *string                      `json:"period_end"`
+	StatementBalance *float64                     `json:"statement_balance"`
+	PaymentDueDate   *string                      `json:"payment_due_date"`
+	Transactions     []parsedStatementTransaction `json:"transactions"`
 }
 
 type parsedStatementTransaction struct {
@@ -68,6 +71,8 @@ type importedStatementSummary struct {
 	Reprocessed         bool      `json:"reprocessed,omitempty"`
 	PeriodStart         string    `json:"period_start"`
 	PeriodEnd           string    `json:"period_end"`
+	StatementBalance    *float64  `json:"statement_balance"`
+	PaymentDueDate      string    `json:"payment_due_date,omitempty"`
 	ImportedAt          time.Time `json:"imported_at"`
 	TransactionCount    int       `json:"transaction_count"`
 	MatchedCount        int       `json:"matched_count"`
@@ -78,15 +83,23 @@ type importedStatementSummary struct {
 }
 
 type statementImportTransaction struct {
-	TransactionID             int64    `json:"statement_transaction_id"`
-	Date                      string   `json:"date"`
-	Merchant                  string   `json:"merchant"`
-	Amount                    float64  `json:"amount"`
-	MatchStatus               string   `json:"match_status"`
-	MatchedPlaidTransactionID *string  `json:"matched_plaid_transaction_id"`
-	MatchedPlaidDate          *string  `json:"matched_plaid_date"`
-	MatchedPlaidMerchant      *string  `json:"matched_plaid_merchant"`
-	MatchedPlaidAmount        *float64 `json:"matched_plaid_amount"`
+	TransactionID             int64                     `json:"statement_transaction_id"`
+	Date                      string                    `json:"date"`
+	Merchant                  string                    `json:"merchant"`
+	Amount                    float64                   `json:"amount"`
+	MatchStatus               string                    `json:"match_status"`
+	MatchedPlaidTransactionID *string                   `json:"matched_plaid_transaction_id"`
+	MatchedPlaidDate          *string                   `json:"matched_plaid_date"`
+	MatchedPlaidMerchant      *string                   `json:"matched_plaid_merchant"`
+	MatchedPlaidAmount        *float64                  `json:"matched_plaid_amount"`
+	Candidates                []statementPlaidCandidate `json:"candidates"`
+}
+
+type statementPlaidCandidate struct {
+	TransactionID string  `json:"transaction_id"`
+	Date          string  `json:"date"`
+	Merchant      string  `json:"merchant"`
+	Amount        float64 `json:"amount"`
 }
 
 type statementDiscrepancy struct {
@@ -315,6 +328,24 @@ func (a *app) uploadAccountStatement(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "no transactions were found in the statement period")
 		return
 	}
+	if parsed.StatementBalance != nil && (math.IsNaN(*parsed.StatementBalance) ||
+		math.IsInf(*parsed.StatementBalance, 0) || *parsed.StatementBalance < 0) {
+		writeError(w, http.StatusUnprocessableEntity, "statement parser returned an invalid statement balance")
+		return
+	}
+	if parsed.PaymentDueDate != nil {
+		if _, err := time.Parse("2006-01-02", *parsed.PaymentDueDate); err != nil {
+			writeError(w, http.StatusUnprocessableEntity, "statement parser returned an invalid payment due date")
+			return
+		}
+	}
+	var statementBalance, paymentDueDate any
+	if parsed.StatementBalance != nil {
+		statementBalance = *parsed.StatementBalance
+	}
+	if parsed.PaymentDueDate != nil {
+		paymentDueDate = *parsed.PaymentDueDate
+	}
 	for _, row := range parsed.Transactions {
 		if _, err := time.Parse("2006-01-02", row.Date); err != nil || strings.TrimSpace(row.Merchant) == "" ||
 			math.IsNaN(row.Amount) || math.IsInf(row.Amount, 0) {
@@ -363,11 +394,12 @@ func (a *app) uploadAccountStatement(w http.ResponseWriter, r *http.Request) {
 	err = tx.QueryRow(r.Context(), `
 		INSERT INTO imported_statements (
 			statement_id, account_id, account_name, parser_id, period_start, period_end,
-			source_sha256, spreadsheet, review_status
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending_review')
+			source_sha256, spreadsheet, statement_balance, payment_due_date, review_status
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending_review')
 		ON CONFLICT (account_id, source_sha256) DO NOTHING
 		RETURNING statement_id`,
-		statementID, r.PathValue("accountID"), accountName, *parserID, periodStart, periodEnd, sourceHash, spreadsheet,
+		statementID, r.PathValue("accountID"), accountName, *parserID, periodStart, periodEnd, sourceHash,
+		spreadsheet, statementBalance, paymentDueDate,
 	).Scan(&statementID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = tx.QueryRow(r.Context(), `
@@ -398,10 +430,11 @@ func (a *app) uploadAccountStatement(w http.ResponseWriter, r *http.Request) {
 		_, err = tx.Exec(r.Context(), `
 			UPDATE imported_statements
 			SET account_name=$1, parser_id=$2, period_start=$3, period_end=$4,
-			    spreadsheet=$5, review_status='pending_review', reviewed_at=NULL,
-			    reviewed_by=NULL, imported_at=NOW()
-			WHERE statement_id=$6`,
-			accountName, *parserID, periodStart, periodEnd, spreadsheet, statementID)
+			    spreadsheet=$5, statement_balance=$6, payment_due_date=$7,
+			    review_status='pending_review', reviewed_at=NULL, reviewed_by=NULL, imported_at=NOW()
+			WHERE statement_id=$8`,
+			accountName, *parserID, periodStart, periodEnd, spreadsheet, statementBalance,
+			paymentDueDate, statementID)
 		if err != nil {
 			log.Printf("update existing statement import: %v", err)
 			writeError(w, http.StatusInternalServerError, "could not refresh the existing statement import")
@@ -602,6 +635,60 @@ func (a *app) getImportedStatement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows.Close()
+	candidateRows, err := a.db.Query(r.Context(), `
+		SELECT sit.statement_transaction_id, t.transaction_id, t.transaction_date::text,
+		       COALESCE(NULLIF(t.merchant_name, ''), t.name), t.amount
+		FROM statement_import_transactions sit
+		JOIN imported_statements s ON s.statement_id=sit.statement_id
+		JOIN transactions t
+		  ON t.account_id=s.account_id
+		 AND NOT t.pending
+		 AND ROUND(t.amount, 2)=ROUND(-sit.amount, 2)
+		 AND t.transaction_date BETWEEN sit.transaction_date - 2 AND sit.transaction_date + 2
+		WHERE sit.statement_id=$1
+		  AND s.review_status='pending_review'
+		  AND sit.match_status IN ('ambiguous', 'statement_only')
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM statement_import_transactions used
+		      JOIN imported_statements used_statement ON used_statement.statement_id=used.statement_id
+		      WHERE used.matched_plaid_transaction_id=t.transaction_id
+		        AND used_statement.review_status <> 'rejected'
+		  )
+		ORDER BY sit.statement_transaction_id, t.transaction_date, t.transaction_id`,
+		summary.StatementID)
+	if err != nil {
+		log.Printf("query Plaid candidates for statement rows: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load Plaid match candidates")
+		return
+	}
+	candidatesByStatementTransaction := make(map[int64][]statementPlaidCandidate)
+	for candidateRows.Next() {
+		var statementTransactionID int64
+		var candidate statementPlaidCandidate
+		if err := candidateRows.Scan(&statementTransactionID, &candidate.TransactionID, &candidate.Date,
+			&candidate.Merchant, &candidate.Amount); err != nil {
+			candidateRows.Close()
+			log.Printf("scan Plaid statement match candidate: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not load Plaid match candidates")
+			return
+		}
+		candidatesByStatementTransaction[statementTransactionID] = append(
+			candidatesByStatementTransaction[statementTransactionID], candidate)
+	}
+	if err := candidateRows.Err(); err != nil {
+		candidateRows.Close()
+		log.Printf("iterate Plaid statement match candidates: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load Plaid match candidates")
+		return
+	}
+	candidateRows.Close()
+	for index := range transactions {
+		transactions[index].Candidates = candidatesByStatementTransaction[transactions[index].TransactionID]
+		if transactions[index].Candidates == nil {
+			transactions[index].Candidates = make([]statementPlaidCandidate, 0)
+		}
+	}
 	issueRows, err := a.db.Query(r.Context(), `
 		SELECT discrepancy_id, plaid_transaction_id, transaction_date::text, merchant, amount, issue_type
 		FROM statement_reconciliation_issues
@@ -635,6 +722,132 @@ func (a *app) getImportedStatement(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *app) matchImportedStatementTransaction(w http.ResponseWriter, r *http.Request) {
+	statementTransactionID, err := strconv.ParseInt(r.PathValue("transactionID"), 10, 64)
+	if err != nil || statementTransactionID < 1 {
+		writeError(w, http.StatusBadRequest, "invalid statement transaction")
+		return
+	}
+	var input struct {
+		PlaidTransactionID string `json:"plaid_transaction_id"`
+	}
+	if err := decodeJSON(r, &input); err != nil || strings.TrimSpace(input.PlaidTransactionID) == "" {
+		writeError(w, http.StatusBadRequest, "a Plaid transaction must be selected")
+		return
+	}
+
+	tx, err := a.db.Begin(r.Context())
+	if err != nil {
+		log.Printf("begin statement transaction match: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not match statement transaction")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	var accountID, reviewStatus, matchStatus, statementDate string
+	var statementAmount float64
+	err = tx.QueryRow(r.Context(), `
+		SELECT s.account_id, s.review_status, sit.match_status,
+		       sit.transaction_date::text, sit.amount
+		FROM statement_import_transactions sit
+		JOIN imported_statements s ON s.statement_id=sit.statement_id
+		WHERE sit.statement_id=$1 AND sit.statement_transaction_id=$2
+		FOR UPDATE OF s, sit`,
+		r.PathValue("statementID"), statementTransactionID,
+	).Scan(&accountID, &reviewStatus, &matchStatus, &statementDate, &statementAmount)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "statement transaction not found")
+		return
+	}
+	if err != nil {
+		log.Printf("load statement transaction for matching: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not match statement transaction")
+		return
+	}
+	if reviewStatus != "pending_review" {
+		writeError(w, http.StatusConflict, "only statements awaiting review can be matched")
+		return
+	}
+	if matchStatus == "matched" {
+		writeError(w, http.StatusConflict, "statement transaction is already matched")
+		return
+	}
+
+	var plaidDate, plaidMerchant string
+	var plaidAmount float64
+	err = tx.QueryRow(r.Context(), `
+		SELECT t.transaction_date::text, COALESCE(NULLIF(t.merchant_name, ''), t.name), t.amount
+		FROM transactions t
+		WHERE t.transaction_id=$1
+		  AND t.account_id=$2
+		  AND NOT t.pending
+		  AND ROUND(t.amount, 2)=ROUND(-$3::numeric, 2)
+		  AND t.transaction_date BETWEEN $4::date - 2 AND $4::date + 2
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM statement_import_transactions used
+		      JOIN imported_statements used_statement ON used_statement.statement_id=used.statement_id
+		      WHERE used.matched_plaid_transaction_id=t.transaction_id
+		        AND used.statement_transaction_id<>$5
+		        AND used_statement.review_status <> 'rejected'
+		  )
+		FOR UPDATE OF t`,
+		strings.TrimSpace(input.PlaidTransactionID), accountID, statementAmount, statementDate, statementTransactionID,
+	).Scan(&plaidDate, &plaidMerchant, &plaidAmount)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusBadRequest, "selected Plaid transaction does not match this account, amount, and date")
+		return
+	}
+	if err != nil {
+		log.Printf("validate Plaid statement match: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not match statement transaction")
+		return
+	}
+	_, err = tx.Exec(r.Context(), `
+		UPDATE statement_import_transactions
+		SET match_status='matched', matched_plaid_transaction_id=$1, matched_plaid_date=$2,
+		    matched_plaid_merchant=$3, matched_plaid_amount=$4
+		WHERE statement_id=$5 AND statement_transaction_id=$6`,
+		strings.TrimSpace(input.PlaidTransactionID), plaidDate, plaidMerchant, plaidAmount,
+		r.PathValue("statementID"), statementTransactionID)
+	if err != nil {
+		log.Printf("save manual statement match: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not save statement match")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+		DELETE FROM statement_reconciliation_issues
+		WHERE statement_id=$1 AND plaid_transaction_id=$2`,
+		r.PathValue("statementID"), strings.TrimSpace(input.PlaidTransactionID)); err != nil {
+		log.Printf("remove matched Plaid reconciliation issue: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not save statement match")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE statement_reconciliation_issues issue
+		SET issue_type='plaid_only'
+		WHERE issue.statement_id=$1 AND issue.issue_type='ambiguous_plaid'
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM statement_import_transactions unresolved
+		      WHERE unresolved.statement_id=issue.statement_id
+		        AND unresolved.match_status IN ('ambiguous', 'statement_only')
+		        AND ROUND(-unresolved.amount, 2)=ROUND(issue.amount, 2)
+		        AND issue.transaction_date BETWEEN unresolved.transaction_date - 2 AND unresolved.transaction_date + 2
+		  )`,
+		r.PathValue("statementID")); err != nil {
+		log.Printf("refresh remaining statement reconciliation issues: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not save statement match")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		log.Printf("commit manual statement match: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not save statement match")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"matched": true})
+}
+
 func (a *app) downloadImportedStatementSpreadsheet(w http.ResponseWriter, r *http.Request) {
 	var spreadsheet []byte
 	err := a.db.QueryRow(r.Context(), `
@@ -658,7 +871,8 @@ func (a *app) downloadImportedStatementSpreadsheet(w http.ResponseWriter, r *htt
 }
 
 const importedStatementSummaryQuery = `
-	SELECT statement_id, account_id, account_name, parser_id, review_status, period_start::text, period_end::text, imported_at,
+	SELECT statement_id, account_id, account_name, parser_id, review_status, period_start::text, period_end::text,
+	       statement_balance, COALESCE(payment_due_date::text, ''), imported_at,
 	       (SELECT COUNT(*) FROM statement_import_transactions t WHERE t.statement_id=s.statement_id),
 	       (SELECT COUNT(*) FROM statement_import_transactions t WHERE t.statement_id=s.statement_id AND t.match_status='matched'),
 	       (SELECT COUNT(*) FROM statement_import_transactions t WHERE t.statement_id=s.statement_id AND t.match_status='statement_only'),
@@ -674,7 +888,8 @@ type statementSummaryRow interface {
 func scanImportedStatementSummary(row statementSummaryRow, summary *importedStatementSummary) error {
 	return row.Scan(
 		&summary.StatementID, &summary.AccountID, &summary.AccountName, &summary.ParserID, &summary.ReviewStatus,
-		&summary.PeriodStart, &summary.PeriodEnd, &summary.ImportedAt, &summary.TransactionCount,
+		&summary.PeriodStart, &summary.PeriodEnd, &summary.StatementBalance, &summary.PaymentDueDate,
+		&summary.ImportedAt, &summary.TransactionCount,
 		&summary.MatchedCount, &summary.StatementOnlyCount, &summary.AmbiguousCount,
 		&summary.PlaidOnlyCount, &summary.AmbiguousPlaidCount,
 	)
@@ -685,7 +900,8 @@ func (a *app) loadImportedStatementSummary(ctx context.Context, statementID stri
 	err := a.db.QueryRow(ctx, importedStatementSummaryQuery+` WHERE statement_id=$1`, statementID).
 		Scan(
 			&summary.StatementID, &summary.AccountID, &summary.AccountName, &summary.ParserID, &summary.ReviewStatus,
-			&summary.PeriodStart, &summary.PeriodEnd, &summary.ImportedAt, &summary.TransactionCount,
+			&summary.PeriodStart, &summary.PeriodEnd, &summary.StatementBalance, &summary.PaymentDueDate,
+			&summary.ImportedAt, &summary.TransactionCount,
 			&summary.MatchedCount, &summary.StatementOnlyCount, &summary.AmbiguousCount,
 			&summary.PlaidOnlyCount, &summary.AmbiguousPlaidCount,
 		)

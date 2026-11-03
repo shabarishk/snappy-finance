@@ -118,6 +118,7 @@ func main() {
 	mux.Handle("PUT /api/admin/accounts/{accountID}/statement-parser", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.setAccountStatementParser))))
 	mux.Handle("POST /api/admin/accounts/{accountID}/statements", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.uploadAccountStatement))))
 	mux.Handle("PATCH /api/admin/statements/{statementID}/review", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.reviewImportedStatement))))
+	mux.Handle("PATCH /api/admin/statements/{statementID}/transactions/{transactionID}/match", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.matchImportedStatementTransaction))))
 	mux.Handle("GET /api/statements", a.requireAuth(http.HandlerFunc(a.listImportedStatements)))
 	mux.Handle("GET /api/statements/{statementID}", a.requireAuth(http.HandlerFunc(a.getImportedStatement)))
 	mux.Handle("GET /api/statements/{statementID}/spreadsheet", a.requireAuth(http.HandlerFunc(a.downloadImportedStatementSpreadsheet)))
@@ -476,12 +477,57 @@ func (a *app) listTransactions(w http.ResponseWriter, r *http.Request) {
 	}
 	isAdmin := currentPrincipal(r).Role == "admin"
 	query := `
+		WITH approved_statement_aliases AS (
+			SELECT DISTINCT ON (
+				s.account_id,
+				REGEXP_REPLACE(LOWER(sit.merchant), '[^a-z0-9]', '', 'g')
+			)
+				s.account_id,
+				REGEXP_REPLACE(LOWER(sit.merchant), '[^a-z0-9]', '', 'g') AS merchant_key,
+				BTRIM(sit.matched_plaid_merchant) AS merchant_alias
+			FROM statement_import_transactions sit
+			JOIN imported_statements s ON s.statement_id=sit.statement_id
+			WHERE s.review_status='approved'
+			  AND sit.match_status='matched'
+			  AND NULLIF(BTRIM(sit.matched_plaid_merchant), '') IS NOT NULL
+			ORDER BY s.account_id,
+			         REGEXP_REPLACE(LOWER(sit.merchant), '[^a-z0-9]', '', 'g'),
+			         s.reviewed_at DESC NULLS LAST,
+			         sit.statement_transaction_id DESC
+		),
+		all_transactions AS (
+			SELECT t.transaction_id, t.account_id, t.name,
+			       COALESCE(NULLIF(t.merchant_name, ''), aliases.merchant_alias) AS merchant_name,
+			       t.amount, t.transaction_date, t.pending, t.category_primary, t.category_detailed,
+			       t.iso_currency_code, t.hidden_from_users, t.category_id,
+			       t.category_match_key <> '' AS has_category_match,
+			       FALSE AS is_statement_import
+			FROM transactions t
+			LEFT JOIN approved_statement_aliases aliases
+			  ON aliases.account_id=t.account_id
+			 AND aliases.merchant_key=REGEXP_REPLACE(LOWER(COALESCE(NULLIF(t.merchant_name, ''), t.name)), '[^a-z0-9]', '', 'g')
+			WHERE ($1 OR NOT t.hidden_from_users)
+
+			UNION ALL
+
+			SELECT 'statement-import-' || sit.statement_transaction_id::text,
+			       s.account_id, sit.merchant, aliases.merchant_alias, -sit.amount,
+			       sit.transaction_date, FALSE, NULL::text, NULL::text, a.iso_currency_code,
+			       FALSE, NULL::text, FALSE, TRUE
+			FROM statement_import_transactions sit
+			JOIN imported_statements s ON s.statement_id=sit.statement_id
+			LEFT JOIN accounts a ON a.account_id=s.account_id
+			LEFT JOIN approved_statement_aliases aliases
+			  ON aliases.account_id=s.account_id
+			 AND aliases.merchant_key=REGEXP_REPLACE(LOWER(sit.merchant), '[^a-z0-9]', '', 'g')
+			WHERE s.review_status='approved'
+			  AND sit.match_status='statement_only'
+		)
 		SELECT transaction_id, account_id, name, merchant_name, amount, transaction_date::text,
-		       pending, category_primary, category_detailed, iso_currency_code,
-		       CASE WHEN $1 THEN hidden_from_users ELSE FALSE END, category_id,
-		       category_match_key <> ''
-		FROM transactions
-		WHERE ($1 OR NOT hidden_from_users)`
+		       pending, category_primary, category_detailed, iso_currency_code, hidden_from_users,
+		       category_id, has_category_match, is_statement_import
+		FROM all_transactions
+		WHERE TRUE`
 	args := []any{isAdmin}
 	if fromDate != "" {
 		query += fmt.Sprintf(" AND transaction_date >= $%d::date", len(args)+1)
@@ -507,7 +553,7 @@ func (a *app) listTransactions(w http.ResponseWriter, r *http.Request) {
 		var item transaction
 		if err := rows.Scan(&item.TransactionID, &item.AccountID, &item.Name, &item.MerchantName, &item.Amount,
 			&item.Date, &item.Pending, &item.CategoryPrimary, &item.CategoryDetailed, &item.Currency,
-			&item.HiddenFromUsers, &item.CategoryID, &item.HasCategoryMatch); err != nil {
+			&item.HiddenFromUsers, &item.CategoryID, &item.HasCategoryMatch, &item.IsStatementImport); err != nil {
 			log.Printf("scan transaction row: %v", err)
 			writeError(w, http.StatusInternalServerError, "could not load transactions")
 			return
@@ -1051,19 +1097,20 @@ type account struct {
 }
 
 type transaction struct {
-	TransactionID    string  `json:"transaction_id"`
-	AccountID        string  `json:"account_id"`
-	Name             string  `json:"name"`
-	MerchantName     *string `json:"merchant_name"`
-	Amount           float64 `json:"amount"`
-	Date             string  `json:"date"`
-	Pending          bool    `json:"pending"`
-	CategoryPrimary  *string `json:"category_primary"`
-	CategoryDetailed *string `json:"category_detailed"`
-	Currency         *string `json:"iso_currency_code"`
-	HiddenFromUsers  bool    `json:"hidden_from_users,omitempty"`
-	CategoryID       *string `json:"category_id"`
-	HasCategoryMatch bool    `json:"has_category_match"`
+	TransactionID     string  `json:"transaction_id"`
+	AccountID         string  `json:"account_id"`
+	Name              string  `json:"name"`
+	MerchantName      *string `json:"merchant_name"`
+	Amount            float64 `json:"amount"`
+	Date              string  `json:"date"`
+	Pending           bool    `json:"pending"`
+	CategoryPrimary   *string `json:"category_primary"`
+	CategoryDetailed  *string `json:"category_detailed"`
+	Currency          *string `json:"iso_currency_code"`
+	HiddenFromUsers   bool    `json:"hidden_from_users,omitempty"`
+	CategoryID        *string `json:"category_id"`
+	HasCategoryMatch  bool    `json:"has_category_match"`
+	IsStatementImport bool    `json:"is_statement_import,omitempty"`
 }
 
 type transactionCategory struct {

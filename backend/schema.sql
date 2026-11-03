@@ -327,6 +327,8 @@ CREATE TABLE IF NOT EXISTS imported_statements (
     review_status TEXT NOT NULL DEFAULT 'approved',
     reviewed_at TIMESTAMPTZ,
     reviewed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    statement_balance NUMERIC(18, 4),
+    payment_due_date DATE,
     imported_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CHECK (period_start <= period_end),
     CHECK (review_status IN ('pending_review', 'approved', 'rejected')),
@@ -336,9 +338,20 @@ CREATE TABLE IF NOT EXISTS imported_statements (
 ALTER TABLE imported_statements ADD COLUMN IF NOT EXISTS review_status TEXT NOT NULL DEFAULT 'approved';
 ALTER TABLE imported_statements ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
 ALTER TABLE imported_statements ADD COLUMN IF NOT EXISTS reviewed_by TEXT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE imported_statements ADD COLUMN IF NOT EXISTS statement_balance NUMERIC(18, 4);
+ALTER TABLE imported_statements ADD COLUMN IF NOT EXISTS payment_due_date DATE;
 
 DO $$
 BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'imported_statements_statement_balance_check'
+          AND conrelid = 'imported_statements'::regclass
+    ) THEN
+        ALTER TABLE imported_statements
+            ADD CONSTRAINT imported_statements_statement_balance_check
+            CHECK (statement_balance IS NULL OR statement_balance >= 0);
+    END IF;
     IF NOT EXISTS (
         SELECT 1 FROM pg_constraint
         WHERE conname = 'imported_statements_review_status_check'
@@ -349,6 +362,12 @@ BEGIN
             CHECK (review_status IN ('pending_review', 'approved', 'rejected'));
     END IF;
 END $$;
+
+CREATE INDEX IF NOT EXISTS imported_statements_approved_balance_idx
+    ON imported_statements (account_id, payment_due_date, reviewed_at DESC)
+    WHERE review_status = 'approved'
+      AND statement_balance IS NOT NULL
+      AND payment_due_date IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS statement_import_transactions (
     statement_transaction_id BIGSERIAL PRIMARY KEY,

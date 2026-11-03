@@ -356,6 +356,7 @@ button { cursor: pointer; }
 .statement-import-actions { display: flex; flex-wrap: wrap; gap: 7px; }
 .statement-import-actions .secondary-button { font-size: 10px; min-height: 34px; padding: 0 9px; }
 .statement-import-summary { align-items: center; color: #617068; display: flex; flex-wrap: wrap; font-size: 10px; gap: 8px 14px; padding-bottom: 12px; }
+.statement-balance-review { background: #f5f8f6; border-radius: 6px; color: #617068; font-size: 11px; line-height: 1.5; margin: 0 0 12px; padding: 8px 10px; }
 .statement-match-count { color: var(--green-dark); }
 .statement-discrepancy-count { color: #bd554b; }
 .statement-ambiguous-count { color: #a8864a; }
@@ -374,6 +375,10 @@ button { cursor: pointer; }
 .statement-detail-row { align-items: center; border-bottom: 1px solid #f0f2f0; display: flex; gap: 12px; justify-content: space-between; min-height: 50px; padding: 8px 0; }
 .statement-detail-row > strong { flex: 0 0 auto; }
 .statement-detail-discrepancy > div > span { color: #bd554b; }
+.statement-manual-match { align-items: end; display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+.statement-manual-match label { color: #617068; display: flex; flex-direction: column; font-size: 10px; gap: 4px; max-width: 420px; width: min(100%, 420px); }
+.statement-manual-match select { background: white; border: 1px solid #dfe6e1; border-radius: 6px; color: #34463e; font: inherit; min-height: 34px; min-width: 0; padding: 0 8px; }
+.statement-manual-match .secondary-button { min-height: 34px; padding: 0 10px; }
 .account-icon, .transaction-icon { align-items: center; background: #f2f7f3; border-radius: 9px; color: #4f8e70; display: inline-flex; flex: 0 0 36px; height: 36px; justify-content: center; margin-right: 12px; }
 .account-info, .transaction-info { display: flex; flex: 1; flex-direction: column; gap: 5px; }
 .account-info strong, .transaction-info strong, .account-balance, .transaction-row > strong { font-size: 12px; font-weight: 600; }
