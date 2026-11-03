@@ -640,11 +640,13 @@ func (a *app) getImportedStatement(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(NULLIF(t.merchant_name, ''), t.name), t.amount
 		FROM statement_import_transactions sit
 		JOIN imported_statements s ON s.statement_id=sit.statement_id
+		JOIN statement_reconciliation_issues issue
+		  ON issue.statement_id=sit.statement_id
+		 AND issue.issue_type IN ('plaid_only', 'ambiguous_plaid')
 		JOIN transactions t
-		  ON t.account_id=s.account_id
+		  ON t.transaction_id=issue.plaid_transaction_id
+		 AND t.account_id=s.account_id
 		 AND NOT t.pending
-		 AND ROUND(t.amount, 2)=ROUND(-sit.amount, 2)
-		 AND t.transaction_date BETWEEN sit.transaction_date - 2 AND sit.transaction_date + 2
 		WHERE sit.statement_id=$1
 		  AND s.review_status='pending_review'
 		  AND sit.match_status IN ('ambiguous', 'statement_only')
@@ -744,17 +746,15 @@ func (a *app) matchImportedStatementTransaction(w http.ResponseWriter, r *http.R
 	}
 	defer tx.Rollback(r.Context())
 
-	var accountID, reviewStatus, matchStatus, statementDate string
-	var statementAmount float64
+	var accountID, reviewStatus, matchStatus string
 	err = tx.QueryRow(r.Context(), `
-		SELECT s.account_id, s.review_status, sit.match_status,
-		       sit.transaction_date::text, sit.amount
+		SELECT s.account_id, s.review_status, sit.match_status
 		FROM statement_import_transactions sit
 		JOIN imported_statements s ON s.statement_id=sit.statement_id
 		WHERE sit.statement_id=$1 AND sit.statement_transaction_id=$2
 		FOR UPDATE OF s, sit`,
 		r.PathValue("statementID"), statementTransactionID,
-	).Scan(&accountID, &reviewStatus, &matchStatus, &statementDate, &statementAmount)
+	).Scan(&accountID, &reviewStatus, &matchStatus)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "statement transaction not found")
 		return
@@ -781,21 +781,26 @@ func (a *app) matchImportedStatementTransaction(w http.ResponseWriter, r *http.R
 		WHERE t.transaction_id=$1
 		  AND t.account_id=$2
 		  AND NOT t.pending
-		  AND ROUND(t.amount, 2)=ROUND(-$3::numeric, 2)
-		  AND t.transaction_date BETWEEN $4::date - 2 AND $4::date + 2
+		  AND EXISTS (
+		      SELECT 1
+		      FROM statement_reconciliation_issues issue
+		      WHERE issue.statement_id=$3
+		        AND issue.plaid_transaction_id=t.transaction_id
+		        AND issue.issue_type IN ('plaid_only', 'ambiguous_plaid')
+		  )
 		  AND NOT EXISTS (
 		      SELECT 1
 		      FROM statement_import_transactions used
 		      JOIN imported_statements used_statement ON used_statement.statement_id=used.statement_id
 		      WHERE used.matched_plaid_transaction_id=t.transaction_id
-		        AND used.statement_transaction_id<>$5
+		        AND used.statement_transaction_id<>$4
 		        AND used_statement.review_status <> 'rejected'
 		  )
 		FOR UPDATE OF t`,
-		strings.TrimSpace(input.PlaidTransactionID), accountID, statementAmount, statementDate, statementTransactionID,
+		strings.TrimSpace(input.PlaidTransactionID), accountID, r.PathValue("statementID"), statementTransactionID,
 	).Scan(&plaidDate, &plaidMerchant, &plaidAmount)
 	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusBadRequest, "selected Plaid transaction does not match this account, amount, and date")
+		writeError(w, http.StatusBadRequest, "selected Plaid transaction is not an unmatched transaction for this statement")
 		return
 	}
 	if err != nil {

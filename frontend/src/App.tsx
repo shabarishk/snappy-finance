@@ -1415,11 +1415,7 @@ export default function App() {
         method: "PATCH",
         body: JSON.stringify({ plaid_transaction_id: plaidTransactionID }),
       });
-      setStatementMatchSelections((current) => {
-        const next = { ...current };
-        delete next[statementTransactionID];
-        return next;
-      });
+      setStatementMatchSelections({});
       setNotice("Statement transaction matched to Plaid; both merchant descriptions were saved.");
       await loadStatementDetails(statementID, true);
     } catch (err) {
@@ -2026,13 +2022,14 @@ export default function App() {
                           </table>
                         </div>
                         <h3>Reconciliation with Plaid</h3>
+                        <p className="statement-match-guidance">Unmatched statement rows can be paired with any unmatched Plaid transaction from this statement. Manually selected matches may have different dates or amounts, so verify the pair before matching.</p>
                         <div className="statement-detail-list">
                           {details.transactions.map((transaction) => (
                             <div className={`statement-detail-row ${transaction.match_status !== "matched" ? "statement-detail-discrepancy" : ""}`} key={transaction.statement_transaction_id}>
                               <div>
                                 <strong>{transaction.merchant}</strong>
                                 <span>{displayDate(transaction.date)} · {transaction.match_status === "matched"
-                                  ? `Matched to ${transaction.matched_plaid_merchant || "Plaid transaction"} on ${transaction.matched_plaid_date ? displayDate(transaction.matched_plaid_date) : "unknown date"}`
+                                  ? `Matched to ${transaction.matched_plaid_merchant || "Plaid transaction"} on ${transaction.matched_plaid_date ? displayDate(transaction.matched_plaid_date) : "unknown date"}${transaction.matched_plaid_amount !== null ? ` · Plaid amount ${money(Math.abs(transaction.matched_plaid_amount))}` : ""}`
                                   : transaction.match_status === "ambiguous" ? "Multiple possible Plaid matches" : "No matching Plaid transaction"}</span>
                                 {statement.review_status === "pending_review" && transaction.match_status !== "matched" && transaction.candidates.length > 0 && (
                                   <div className="statement-manual-match">
@@ -2048,7 +2045,7 @@ export default function App() {
                                         <option value="">Select a transaction</option>
                                         {transaction.candidates.map((candidate) => (
                                           <option key={candidate.transaction_id} value={candidate.transaction_id}>
-                                            {candidate.merchant} · {displayDate(candidate.date)} · {money(Math.abs(candidate.amount))}
+                                            {candidate.merchant} · {displayDate(candidate.date)} · {money(candidate.amount)}
                                           </option>
                                         ))}
                                       </select>

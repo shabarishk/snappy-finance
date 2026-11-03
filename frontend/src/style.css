@@ -357,6 +357,7 @@ button { cursor: pointer; }
 .statement-import-actions .secondary-button { font-size: 10px; min-height: 34px; padding: 0 9px; }
 .statement-import-summary { align-items: center; color: #617068; display: flex; flex-wrap: wrap; font-size: 10px; gap: 8px 14px; padding-bottom: 12px; }
 .statement-balance-review { background: #f5f8f6; border-radius: 6px; color: #617068; font-size: 11px; line-height: 1.5; margin: 0 0 12px; padding: 8px 10px; }
+.statement-match-guidance { color: #617068; font-size: 10px; line-height: 1.5; margin: -4px 0 10px; }
 .statement-match-count { color: var(--green-dark); }
 .statement-discrepancy-count { color: #bd554b; }
 .statement-ambiguous-count { color: #a8864a; }
