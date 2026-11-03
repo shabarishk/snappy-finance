@@ -35,7 +35,10 @@ A self-hosted personal finance app scaffold using Go, React, PostgreSQL, and Pla
 - Periodic sync worker and a manual sync action.
 - React dashboard for linked accounts and a separate Transactions page with cash, credit, and loan account tabs and selectable 25/50/75/100-item pages.
 - The Transactions page displays each transaction's account and has a right-side filter drawer for multi-account selection, expense categories, and showing only transactions without an administrator-assigned category for categorization.
+- Administrators can assign a bundled statement parser to each account and import PDF statements. The Bilt parser uses Linux OCR for scanned pages, extracts the statement period when possible, and otherwise asks the administrator to enter it. After processing, the administrator can review the generated spreadsheet preview and Plaid reconciliation before approving or rejecting the statement. Imported rows are reconciled one-to-one against posted Plaid transactions by signed amount to the cent and a two-day date tolerance; unmatched and ambiguous records are flagged without overwriting Plaid data. The uploaded PDF is deleted after processing, while extracted statement history and its three-column Excel spreadsheet are retained, including after a Plaid connection is unlinked.
 - Docker Compose deployment with PostgreSQL data persisted in a named volume.
+
+The bundled parser currently supports Bilt card statements. Add and deploy additional trusted parsers before assigning them to accounts; administrator-uploaded scripts are not executed by the application.
 
 ## Run locally with Docker
 

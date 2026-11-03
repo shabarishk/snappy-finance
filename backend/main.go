@@ -23,17 +23,18 @@ import (
 )
 
 type config struct {
-	addr          string
-	databaseURL   string
-	adminUsername string
-	adminPassword string
-	sessionSecret []byte
-	encryptionKey []byte
-	plaidEnv      string
-	plaidClientID string
-	plaidSecret   string
-	syncInterval  time.Duration
-	demoData      bool
+	addr                  string
+	databaseURL           string
+	adminUsername         string
+	adminPassword         string
+	sessionSecret         []byte
+	encryptionKey         []byte
+	plaidEnv              string
+	plaidClientID         string
+	plaidSecret           string
+	statementParserScript string
+	syncInterval          time.Duration
+	demoData              bool
 }
 
 type app struct {
@@ -113,6 +114,13 @@ func main() {
 	mux.Handle("POST /api/plaid/accounts/{accountID}/sync", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.syncAccount))))
 	mux.Handle("DELETE /api/plaid/accounts/{accountID}", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.unlinkAccount))))
 	mux.Handle("GET /api/accounts", a.requireAuth(http.HandlerFunc(a.listAccounts)))
+	mux.Handle("GET /api/statement-parsers", a.requireAuth(http.HandlerFunc(a.listStatementParsers)))
+	mux.Handle("PUT /api/admin/accounts/{accountID}/statement-parser", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.setAccountStatementParser))))
+	mux.Handle("POST /api/admin/accounts/{accountID}/statements", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.uploadAccountStatement))))
+	mux.Handle("PATCH /api/admin/statements/{statementID}/review", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.reviewImportedStatement))))
+	mux.Handle("GET /api/statements", a.requireAuth(http.HandlerFunc(a.listImportedStatements)))
+	mux.Handle("GET /api/statements/{statementID}", a.requireAuth(http.HandlerFunc(a.getImportedStatement)))
+	mux.Handle("GET /api/statements/{statementID}/spreadsheet", a.requireAuth(http.HandlerFunc(a.downloadImportedStatementSpreadsheet)))
 	mux.Handle("GET /api/transactions", a.requireAuth(http.HandlerFunc(a.listTransactions)))
 	mux.Handle("PATCH /api/admin/transactions/visibility", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.updateTransactionVisibility))))
 	mux.Handle("PATCH /api/admin/transactions/category", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.updateTransactionCategory))))
@@ -147,6 +155,7 @@ func loadConfig() (config, error) {
 	cfg.plaidEnv = env("PLAID_ENV", "sandbox")
 	cfg.plaidClientID = os.Getenv("PLAID_CLIENT_ID")
 	cfg.plaidSecret = os.Getenv("PLAID_SECRET")
+	cfg.statementParserScript = env("STATEMENT_PARSER_SCRIPT", "scripts/parse_bilt_app.py")
 	cfg.syncInterval = 6 * time.Hour
 	if value := os.Getenv("DEMO_DATA"); value != "" {
 		cfg.demoData, err = strconv.ParseBool(value)
@@ -429,7 +438,8 @@ func (a *app) listAccounts(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.db.Query(r.Context(), `
 		SELECT accounts.account_id, accounts.name, accounts.official_name, accounts.mask, accounts.type,
 		       accounts.subtype, accounts.current_balance, accounts.iso_currency_code, plaid_items.demo_data,
-		       cycle.statement_close_day, cycle.statement_due_day, accounts.item_id, plaid_items.last_synced_at
+		       cycle.statement_close_day, cycle.statement_due_day, accounts.item_id, plaid_items.last_synced_at,
+		       accounts.statement_parser_id
 		FROM accounts
 		JOIN plaid_items USING (item_id)
 		LEFT JOIN credit_card_cycles cycle USING (account_id)
@@ -443,7 +453,7 @@ func (a *app) listAccounts(w http.ResponseWriter, r *http.Request) {
 	accounts := make([]account, 0)
 	for rows.Next() {
 		var item account
-		if err := rows.Scan(&item.AccountID, &item.Name, &item.OfficialName, &item.Mask, &item.Type, &item.Subtype, &item.CurrentBalance, &item.Currency, &item.DemoData, &item.StatementCloseDay, &item.StatementDueDay, &item.ItemID, &item.LastSyncedAt); err != nil {
+		if err := rows.Scan(&item.AccountID, &item.Name, &item.OfficialName, &item.Mask, &item.Type, &item.Subtype, &item.CurrentBalance, &item.Currency, &item.DemoData, &item.StatementCloseDay, &item.StatementDueDay, &item.ItemID, &item.LastSyncedAt, &item.StatementParserID); err != nil {
 			log.Printf("scan account row: %v", err)
 			writeError(w, http.StatusInternalServerError, "could not load accounts")
 			return
@@ -1037,6 +1047,7 @@ type account struct {
 	StatementCloseDay *int16     `json:"statement_close_day"`
 	StatementDueDay   *int16     `json:"statement_due_day"`
 	LastSyncedAt      *time.Time `json:"last_synced_at"`
+	StatementParserID *string    `json:"statement_parser_id"`
 }
 
 type transaction struct {

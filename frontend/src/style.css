@@ -332,6 +332,48 @@ button { cursor: pointer; }
 .account-row { gap: 12px; }
 .account-actions { display: flex; flex: 0 0 auto; }
 .account-actions .secondary-button { min-height: 35px; padding: 0 10px; }
+.account-statement-row { border-bottom: 1px solid #f0f2f0; }
+.account-statement-row .account-row { border-bottom: 0; }
+.account-parser-control { align-items: center; color: #74817a; display: flex; font-size: 10px; gap: 9px; margin: 0 0 0 48px; padding: 0 0 12px; }
+.account-parser-control select, .statement-upload-form select, .statement-upload-form input { background: white; border: 1px solid #dfe6e1; border-radius: 6px; color: #34463e; font: inherit; min-height: 36px; padding: 0 9px; }
+.account-parser-control select { min-width: 180px; }
+.statement-upload-panel { border-top: 1px solid var(--line); margin-top: 18px; padding: 18px 22px 4px; }
+.statement-upload-panel h3 { color: #34463e; font-size: 12px; margin: 0 0 5px; }
+.statement-upload-panel p { color: var(--muted); font-size: 10px; line-height: 1.5; margin: 0 0 14px; }
+.statement-upload-form { align-items: end; display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.statement-upload-form label { color: #52615a; display: flex; flex-direction: column; font-size: 10px; gap: 5px; min-width: 0; }
+.statement-upload-form input[type="file"] { padding: 7px; }
+.statement-upload-form .primary-button { justify-self: start; min-height: 36px; }
+.statement-import-list { padding: 0 22px 16px; }
+.statement-import-card + .statement-import-card { border-top: 1px solid var(--line); }
+.statement-import-heading { align-items: center; display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; padding: 15px 0 10px; }
+.statement-import-heading > div:first-child, .statement-detail-row > div { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.statement-import-heading strong, .statement-detail-row strong { color: #34463e; font-size: 11px; font-weight: 600; }
+.statement-import-heading span, .statement-detail-row span { color: var(--muted); font-size: 10px; }
+.statement-review-status { align-self: flex-start; background: #f5f2e8; border-radius: 999px; color: #94733d !important; padding: 4px 8px; }
+.statement-review-status.status-approved { background: #edf7f1; color: var(--green-dark) !important; }
+.statement-review-status.status-rejected { background: #fbefed; color: #bd554b !important; }
+.statement-import-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.statement-import-actions .secondary-button { font-size: 10px; min-height: 34px; padding: 0 9px; }
+.statement-import-summary { align-items: center; color: #617068; display: flex; flex-wrap: wrap; font-size: 10px; gap: 8px 14px; padding-bottom: 12px; }
+.statement-match-count { color: var(--green-dark); }
+.statement-discrepancy-count { color: #bd554b; }
+.statement-ambiguous-count { color: #a8864a; }
+.statement-import-details { border-top: 1px solid #eff1ef; padding: 12px 0; }
+.statement-import-details h3 { color: #52615a; font-size: 10px; margin: 0 0 5px; }
+.statement-import-details h3:not(:first-child) { margin-top: 16px; }
+.statement-spreadsheet-preview { border: 1px solid #e8ede9; border-radius: 7px; max-height: 300px; overflow: auto; }
+.statement-spreadsheet-preview table { border-collapse: collapse; font-size: 10px; min-width: 460px; width: 100%; }
+.statement-spreadsheet-preview th, .statement-spreadsheet-preview td { border-bottom: 1px solid #eff1ef; padding: 8px 10px; text-align: left; }
+.statement-spreadsheet-preview th { background: #f7f9f7; color: #52615a; font-weight: 600; position: sticky; top: 0; }
+.statement-spreadsheet-preview th:last-child, .statement-spreadsheet-preview td:last-child { text-align: right; }
+.statement-review-actions { align-items: center; border-top: 1px solid #e8ede9; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; padding-top: 14px; }
+.statement-review-actions > span { color: var(--muted); flex: 1 1 100%; font-size: 10px; }
+.statement-review-actions .primary-button, .statement-review-actions .secondary-button { min-height: 36px; }
+.statement-review-actions .statement-reject-button { color: #a9483f; }
+.statement-detail-row { align-items: center; border-bottom: 1px solid #f0f2f0; display: flex; gap: 12px; justify-content: space-between; min-height: 50px; padding: 8px 0; }
+.statement-detail-row > strong { flex: 0 0 auto; }
+.statement-detail-discrepancy > div > span { color: #bd554b; }
 .account-icon, .transaction-icon { align-items: center; background: #f2f7f3; border-radius: 9px; color: #4f8e70; display: inline-flex; flex: 0 0 36px; height: 36px; justify-content: center; margin-right: 12px; }
 .account-info, .transaction-info { display: flex; flex: 1; flex-direction: column; gap: 5px; }
 .account-info strong, .transaction-info strong, .account-balance, .transaction-row > strong { font-size: 12px; font-weight: 600; }
@@ -453,6 +495,14 @@ footer { color: #9aa39e; font-size: 10px; padding: 6px 0 16px; }
   .subscription-history { padding-left: 15px; padding-right: 15px; }
   .transaction-tab { border-bottom: 2px solid transparent; border-left: 0; flex: 1 0 105px; text-align: center; }
   .transaction-tab.active { background: none; border-bottom-color: var(--green); }
+  .account-parser-control { align-items: flex-start; flex-direction: column; margin-left: 0; padding-left: 15px; }
+  .account-parser-control select { width: 100%; }
+  .statement-upload-panel { padding-left: 15px; padding-right: 15px; }
+  .statement-upload-form { grid-template-columns: minmax(0, 1fr); }
+  .statement-upload-form .primary-button { width: 100%; }
+  .statement-import-list { padding-left: 15px; padding-right: 15px; }
+  .statement-import-heading { align-items: flex-start; flex-direction: column; }
+  .statement-import-actions { width: 100%; }
   .transaction-date-filters { align-items: stretch; padding-left: 15px; padding-right: 15px; }
   .transaction-date-filters label { flex: 1 1 130px; }
   .transaction-totals { align-items: flex-start; gap: 12px 18px; padding-left: 15px; padding-right: 15px; }

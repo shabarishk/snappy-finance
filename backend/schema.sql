@@ -41,6 +41,20 @@ CREATE TABLE IF NOT EXISTS accounts (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS statement_parsers (
+    parser_id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+INSERT INTO statement_parsers (parser_id, display_name)
+VALUES ('bilt', 'Bilt card statement')
+ON CONFLICT (parser_id) DO UPDATE SET display_name = EXCLUDED.display_name, enabled = TRUE;
+
+ALTER TABLE accounts
+    ADD COLUMN IF NOT EXISTS statement_parser_id TEXT
+    REFERENCES statement_parsers(parser_id) ON DELETE SET NULL;
+
 CREATE TABLE IF NOT EXISTS finance_settings (
     setting_id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (setting_id = 1),
     expendable_cash_account_id TEXT REFERENCES accounts(account_id) ON DELETE SET NULL,
@@ -299,6 +313,67 @@ CREATE TABLE IF NOT EXISTS transactions (
     category_rule_exempt BOOLEAN NOT NULL DEFAULT FALSE,
     hidden_from_users BOOLEAN NOT NULL DEFAULT FALSE,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS imported_statements (
+    statement_id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    account_name TEXT NOT NULL,
+    parser_id TEXT NOT NULL REFERENCES statement_parsers(parser_id),
+    period_start DATE NOT NULL,
+    period_end DATE NOT NULL,
+    source_sha256 TEXT NOT NULL,
+    spreadsheet BYTEA NOT NULL,
+    review_status TEXT NOT NULL DEFAULT 'approved',
+    reviewed_at TIMESTAMPTZ,
+    reviewed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    imported_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (period_start <= period_end),
+    CHECK (review_status IN ('pending_review', 'approved', 'rejected')),
+    UNIQUE (account_id, source_sha256)
+);
+
+ALTER TABLE imported_statements ADD COLUMN IF NOT EXISTS review_status TEXT NOT NULL DEFAULT 'approved';
+ALTER TABLE imported_statements ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+ALTER TABLE imported_statements ADD COLUMN IF NOT EXISTS reviewed_by TEXT REFERENCES users(id) ON DELETE SET NULL;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'imported_statements_review_status_check'
+          AND conrelid = 'imported_statements'::regclass
+    ) THEN
+        ALTER TABLE imported_statements
+            ADD CONSTRAINT imported_statements_review_status_check
+            CHECK (review_status IN ('pending_review', 'approved', 'rejected'));
+    END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS statement_import_transactions (
+    statement_transaction_id BIGSERIAL PRIMARY KEY,
+    statement_id TEXT NOT NULL REFERENCES imported_statements(statement_id) ON DELETE CASCADE,
+    row_number INTEGER NOT NULL,
+    transaction_date DATE NOT NULL,
+    merchant TEXT NOT NULL,
+    amount NUMERIC(18, 2) NOT NULL,
+    match_status TEXT NOT NULL CHECK (match_status IN ('matched', 'statement_only', 'ambiguous')),
+    matched_plaid_transaction_id TEXT,
+    matched_plaid_date DATE,
+    matched_plaid_merchant TEXT,
+    matched_plaid_amount NUMERIC(18, 2),
+    UNIQUE (statement_id, row_number)
+);
+
+CREATE TABLE IF NOT EXISTS statement_reconciliation_issues (
+    discrepancy_id BIGSERIAL PRIMARY KEY,
+    statement_id TEXT NOT NULL REFERENCES imported_statements(statement_id) ON DELETE CASCADE,
+    plaid_transaction_id TEXT NOT NULL,
+    transaction_date DATE NOT NULL,
+    merchant TEXT NOT NULL,
+    amount NUMERIC(18, 2) NOT NULL,
+    issue_type TEXT NOT NULL CHECK (issue_type IN ('plaid_only', 'ambiguous_plaid')),
+    UNIQUE (statement_id, plaid_transaction_id)
 );
 
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS category_id TEXT REFERENCES transaction_categories(category_id);

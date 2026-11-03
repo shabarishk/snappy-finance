@@ -1,0 +1,85 @@
+import tempfile
+import unittest
+from datetime import date
+from pathlib import Path
+
+import pymupdf
+from openpyxl import load_workbook
+
+import parse_bilt_app
+
+
+class BiltStatementParserTests(unittest.TestCase):
+    def test_extracts_statement_period(self):
+        self.assertEqual(
+            parse_bilt_app.extract_statement_period(
+                "Statement period: 10/01/2026 - 10/31/2026"
+            ),
+            ("2026-10-01", "2026-10-31"),
+        )
+        self.assertEqual(
+            parse_bilt_app.extract_statement_period(
+                "Billing cycle October 1, 2026 through October 31, 2026"
+            ),
+            ("2026-10-01", "2026-10-31"),
+        )
+        self.assertEqual(parse_bilt_app.extract_statement_period("No period here"), (None, None))
+
+    def test_extracts_standardized_transactions_and_spreadsheet(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            pdf_path = root / "bilt.pdf"
+            document = pymupdf.open()
+            page = document.new_page(width=612, height=792)
+            page.insert_text((20, 30), "Statement period: 10/01/2026 - 10/31/2026")
+            page.insert_text((20, 60), "Payment and credits")
+            page.insert_text((20, 90), "Oct 05, 2026")
+            page.insert_text((180, 90), "Payment from bank")
+            page.insert_text((510, 90), "$50.00")
+            page.insert_text((20, 120), "Your transactions")
+            page.insert_text((20, 150), "Oct 06, 2026")
+            page.insert_text((180, 150), "Coffee Shop")
+            page.insert_text((510, 150), "$12.34")
+            page.insert_text((20, 180), "Shabarish's transactions")
+            page.insert_text((20, 210), "Oct 08, 2026")
+            page.insert_text((180, 210), "Grocery Mart")
+            page.insert_text((510, 210), "$30.00")
+            document.save(pdf_path)
+            document.close()
+
+            start, end, rows = parse_bilt_app.extract_rows(pdf_path)
+            self.assertEqual((start, end), ("2026-10-01", "2026-10-31"))
+            self.assertEqual(
+                rows,
+                [
+                    {"date": "2026-10-05", "merchant": "Payment from bank", "amount": -50.0},
+                    {"date": "2026-10-06", "merchant": "Coffee Shop", "amount": 12.34},
+                    {"date": "2026-10-08", "merchant": "Grocery Mart", "amount": 30.0},
+                ],
+            )
+
+            spreadsheet_path = root / "transactions.xlsx"
+            parse_bilt_app.write_spreadsheet(spreadsheet_path, rows)
+            workbook = load_workbook(spreadsheet_path, data_only=False)
+            worksheet = workbook["Transactions"]
+            self.assertEqual(
+                [cell.value for cell in worksheet[1]],
+                ["Date", "Merchant", "Amount"],
+            )
+            self.assertEqual(worksheet.max_column, 3)
+            self.assertEqual(worksheet["A2"].value.date(), date(2026, 10, 5))
+
+    def test_spreadsheet_stores_merchant_as_text(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "transactions.xlsx"
+            parse_bilt_app.write_spreadsheet(
+                path,
+                [{"date": "2026-10-01", "merchant": "=1+1", "amount": 2.0}],
+            )
+            cell = load_workbook(path, data_only=False)["Transactions"]["B2"]
+            self.assertEqual(cell.value, "=1+1")
+            self.assertEqual(cell.data_type, "s")
+
+
+if __name__ == "__main__":
+    unittest.main()
