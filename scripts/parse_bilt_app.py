@@ -10,7 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -137,18 +137,30 @@ def extract_rows(
             raise RuntimeError("The statement period start must be on or before its end.")
         period_start, period_end = start.isoformat(), end.isoformat()
 
+    first_transaction_date = None
+    last_transaction_date = None
+    if period_start and period_end:
+        first_transaction_date = datetime.strptime(period_start, "%Y-%m-%d").date() - timedelta(days=2)
+        last_transaction_date = datetime.strptime(period_end, "%Y-%m-%d").date() + timedelta(days=2)
+
     rows = []
     incomplete_rows = 0
     for section in parse_bilt.SECTIONS[:2]:
         for parsed in parsed_sections[section]:
+            transaction_date = parsed["Date"]
+            if not transaction_date:
+                incomplete_rows += 1
+                continue
+            date = transaction_date.date()
+            if first_transaction_date and last_transaction_date:
+                if date < first_transaction_date or date > last_transaction_date:
+                    continue
             amount = parsed["Amount"]
             merchant = re.sub(r"\s+", " ", str(parsed["Description"])).strip()
-            transaction_date = parsed["Date"]
-            if amount is None or not merchant or not transaction_date:
+            if amount is None or not merchant:
                 incomplete_rows += 1
                 continue
             signed_amount = abs(float(amount)) if section == parse_bilt.SECTIONS[0] else -abs(float(amount))
-            date = transaction_date.date()
             rows.append(
                 {
                     "date": date.isoformat(),

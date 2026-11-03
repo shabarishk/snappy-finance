@@ -44,6 +44,30 @@ class BiltStatementParserTests(unittest.TestCase):
                 [{"date": "2026-10-06", "merchant": "Coffee Shop", "amount": -12.34}],
             )
 
+    def test_filters_rows_outside_period_and_keeps_two_day_boundary_rows(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            pdf_path = Path(temporary_directory) / "statement-range.pdf"
+            document = pymupdf.open()
+            page = document.new_page(width=612, height=792)
+            page.insert_text((20, 30), "Statement period: 10/01/2026 - 10/31/2026")
+            page.insert_text((20, 60), "Transactions")
+            for y, day, merchant in (
+                (90, "Sep 29, 2026", "At boundary"),
+                (120, "Sep 28, 2026", "Too early"),
+                (150, "Nov 03, 2026", "Too late"),
+            ):
+                page.insert_text((20, y), day)
+                page.insert_text((180, y), merchant)
+                page.insert_text((510, y), "$10.00")
+            document.save(pdf_path)
+            document.close()
+
+            _, _, rows = parse_bilt_app.extract_rows(pdf_path)
+            self.assertEqual(
+                rows,
+                [{"date": "2026-09-29", "merchant": "At boundary", "amount": -10.0}],
+            )
+
     def test_extracts_statement_period(self):
         self.assertEqual(
             parse_bilt_app.extract_statement_period(
