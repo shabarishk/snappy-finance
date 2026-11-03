@@ -306,6 +306,10 @@ func (a *app) uploadAccountStatement(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
+	periodStartDate, _ := time.Parse("2006-01-02", periodStart)
+	periodEndDate, _ := time.Parse("2006-01-02", periodEnd)
+	firstIncludedDate := periodStartDate.AddDate(0, 0, -2).Format("2006-01-02")
+	lastIncludedDate := periodEndDate.AddDate(0, 0, 2).Format("2006-01-02")
 	if len(parsed.Transactions) == 0 {
 		writeError(w, http.StatusUnprocessableEntity, "no transactions were found in the statement period")
 		return
@@ -316,7 +320,7 @@ func (a *app) uploadAccountStatement(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnprocessableEntity, "statement parser returned an invalid transaction row")
 			return
 		}
-		if row.Date < periodStart || row.Date > periodEnd {
+		if row.Date < firstIncludedDate || row.Date > lastIncludedDate {
 			writeError(w, http.StatusUnprocessableEntity, "parsed transactions fall outside the selected statement period; verify the period dates")
 			return
 		}
@@ -334,8 +338,6 @@ func (a *app) uploadAccountStatement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	matches, ambiguousPlaidIDs := reconcileStatementRows(parsed.Transactions, candidates)
-	periodStartDate, _ := time.Parse("2006-01-02", periodStart)
-	periodEndDate, _ := time.Parse("2006-01-02", periodEnd)
 	matchedPlaidIDs := make(map[string]bool)
 	for _, match := range matches {
 		if match.Plaid != nil {
@@ -685,7 +687,8 @@ func reconcileStatementRows(rows []parsedStatementTransaction, plaidRows []plaid
 		statementDate, _ := time.Parse("2006-01-02", statementRow.Date)
 		for plaidIndex, plaidRow := range plaidRows {
 			plaidDate, _ := time.Parse("2006-01-02", plaidRow.Date)
-			if cents(statementRow.Amount) != cents(plaidRow.Amount) || math.Abs(statementDate.Sub(plaidDate).Hours()/24) > 2 {
+			// Bilt statements show spending and payments with signs opposite to Plaid.
+			if cents(-statementRow.Amount) != cents(plaidRow.Amount) || math.Abs(statementDate.Sub(plaidDate).Hours()/24) > 2 {
 				continue
 			}
 			candidatesByStatement[statementIndex] = append(candidatesByStatement[statementIndex], plaidIndex)

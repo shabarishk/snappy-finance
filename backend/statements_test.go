@@ -8,10 +8,10 @@ import (
 func TestReconcileStatementRowsMatchesUniqueAmountWithinTwoDays(t *testing.T) {
 	statementRows := []parsedStatementTransaction{
 		{Date: "2026-01-03", Merchant: "Coffee shop", Amount: -12.50},
-		{Date: "2026-01-12", Merchant: "Utility company", Amount: 80.00},
+		{Date: "2026-01-12", Merchant: "Utility company", Amount: -80.00},
 	}
 	plaidRows := []plaidStatementTransaction{
-		{TransactionID: "match", Date: "2026-01-01", Merchant: "COFFEE", Amount: -12.50},
+		{TransactionID: "match", Date: "2026-01-01", Merchant: "COFFEE", Amount: 12.50},
 		{TransactionID: "outside-window", Date: "2026-01-15", Merchant: "Utility", Amount: 80.00},
 	}
 
@@ -29,8 +29,8 @@ func TestReconcileStatementRowsMatchesUniqueAmountWithinTwoDays(t *testing.T) {
 
 func TestReconcileStatementRowsMarksDuplicateCandidatesAmbiguous(t *testing.T) {
 	statementRows := []parsedStatementTransaction{
-		{Date: "2026-02-01", Merchant: "Store one", Amount: 25.00},
-		{Date: "2026-02-02", Merchant: "Store two", Amount: 25.00},
+		{Date: "2026-02-01", Merchant: "Store one", Amount: -25.00},
+		{Date: "2026-02-02", Merchant: "Store two", Amount: -25.00},
 	}
 	plaidRows := []plaidStatementTransaction{
 		{TransactionID: "plaid-one", Date: "2026-02-02", Merchant: "Store", Amount: 25.00},
@@ -47,17 +47,17 @@ func TestReconcileStatementRowsMarksDuplicateCandidatesAmbiguous(t *testing.T) {
 	}
 }
 
-func TestReconcileStatementRowsRequiresSignedAmountMatch(t *testing.T) {
+func TestReconcileStatementRowsConvertsStatementSignToPlaidSign(t *testing.T) {
 	statementRows := []parsedStatementTransaction{
 		{Date: "2026-03-01", Merchant: "Payment", Amount: -50.00},
 	}
 	plaidRows := []plaidStatementTransaction{
-		{TransactionID: "opposite-sign", Date: "2026-03-01", Merchant: "Payment", Amount: 50.00},
+		{TransactionID: "plaid-sign", Date: "2026-03-01", Merchant: "Payment", Amount: 50.00},
 	}
 
 	matches, _ := reconcileStatementRows(statementRows, plaidRows)
-	if matches[0].Status != "statement_only" {
-		t.Fatalf("match status = %q, want statement_only when amount sign differs", matches[0].Status)
+	if matches[0].Status != "matched" {
+		t.Fatalf("match status = %q, want matched after sign conversion", matches[0].Status)
 	}
 }
 

@@ -33,8 +33,8 @@ DATE_PATTERN = re.compile(
 )
 SECTION_PATTERNS = (
     re.compile(r"payments?\s+and\s+credits?", re.IGNORECASE),
-    re.compile(r"your\s+transactions", re.IGNORECASE),
-    re.compile(r"shabarish['’]s\s+transactions", re.IGNORECASE),
+    re.compile(r"^(?!.*shabarish['’]s)(?:your\s+)?transactions\b", re.IGNORECASE),
+    re.compile(r"shabarish['’]s.{0,24}\btransactions\b", re.IGNORECASE),
 )
 
 

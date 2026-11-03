@@ -32,6 +32,16 @@ PERIOD_PATTERN = re.compile(
     rf"\s*:?\s*(?:from\s+)?({DATE_TEXT})\s*(?:to|through|[-–—])\s*({DATE_TEXT})",
     re.IGNORECASE,
 )
+MONTH_NAME = (
+    r"Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+    r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|"
+    r"Dec(?:ember)?"
+)
+SHORT_PERIOD_PATTERN = re.compile(
+    rf"({MONTH_NAME})\s+(\d{{1,2}})\s*[-–—]\s*"
+    rf"({MONTH_NAME})\s+(\d{{1,2}}),?\s+(\d{{4}})",
+    re.IGNORECASE,
+)
 
 
 def tesseract_ocr(image_path: Path) -> list[dict[str, Any]]:
@@ -82,12 +92,27 @@ def parse_period_date(value: str) -> datetime | None:
 
 
 def extract_statement_period(text: str) -> tuple[str | None, str | None]:
-    match = PERIOD_PATTERN.search(re.sub(r"\s+", " ", text))
+    normalized_text = re.sub(r"\s+", " ", text)
+    match = PERIOD_PATTERN.search(normalized_text)
+    if match:
+        start = parse_period_date(match.group(1))
+        end = parse_period_date(match.group(2))
+        if start and end and start <= end:
+            return start.date().isoformat(), end.date().isoformat()
+
+    match = SHORT_PERIOD_PATTERN.search(normalized_text)
     if not match:
         return None, None
-    start = parse_period_date(match.group(1))
-    end = parse_period_date(match.group(2))
-    if not start or not end or start > end:
+    start_month = datetime.strptime(match.group(1)[:3].title(), "%b").month
+    start_day = int(match.group(2))
+    end_month = datetime.strptime(match.group(3)[:3].title(), "%b").month
+    end_day = int(match.group(4))
+    end_year = int(match.group(5))
+    start_year = end_year - (1 if start_month > end_month else 0)
+    try:
+        start = datetime(start_year, start_month, start_day)
+        end = datetime(end_year, end_month, end_day)
+    except ValueError:
         return None, None
     return start.date().isoformat(), end.date().isoformat()
 
@@ -114,19 +139,16 @@ def extract_rows(
 
     rows = []
     incomplete_rows = 0
-    for section, section_rows in parsed_sections.items():
-        for parsed in section_rows:
+    for section in parse_bilt.SECTIONS[:2]:
+        for parsed in parsed_sections[section]:
             amount = parsed["Amount"]
             merchant = re.sub(r"\s+", " ", str(parsed["Description"])).strip()
             transaction_date = parsed["Date"]
             if amount is None or not merchant or not transaction_date:
                 incomplete_rows += 1
                 continue
-            signed_amount = -abs(float(amount)) if section == parse_bilt.SECTIONS[0] else abs(float(amount))
+            signed_amount = abs(float(amount)) if section == parse_bilt.SECTIONS[0] else -abs(float(amount))
             date = transaction_date.date()
-            if period_start and period_end:
-                if date.isoformat() < period_start or date.isoformat() > period_end:
-                    continue
             rows.append(
                 {
                     "date": date.isoformat(),

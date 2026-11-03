@@ -6,10 +6,44 @@ from pathlib import Path
 import pymupdf
 from openpyxl import load_workbook
 
+import parse_bilt
 import parse_bilt_app
 
 
 class BiltStatementParserTests(unittest.TestCase):
+    def test_recognizes_current_and_legacy_transaction_sections(self):
+        section_pattern = parse_bilt.SECTION_PATTERNS[1]
+        self.assertRegex("Your transactions", section_pattern)
+        self.assertRegex("Transactions", section_pattern)
+        self.assertNotRegex(
+            "Shabarish's wo transactions . Authorized user",
+            section_pattern,
+        )
+
+    def test_recognizes_ocr_noise_in_authorized_user_section_header(self):
+        self.assertRegex(
+            "Shabarish's wo transactions . Authorized user",
+            parse_bilt.SECTION_PATTERNS[2],
+        )
+
+    def test_extracts_transactions_under_legacy_heading(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            pdf_path = Path(temporary_directory) / "legacy-bilt.pdf"
+            document = pymupdf.open()
+            page = document.new_page(width=612, height=792)
+            page.insert_text((20, 60), "Transactions")
+            page.insert_text((20, 90), "Oct 06, 2026")
+            page.insert_text((180, 90), "Coffee Shop")
+            page.insert_text((510, 90), "$12.34")
+            document.save(pdf_path)
+            document.close()
+
+            _, _, rows = parse_bilt_app.extract_rows(pdf_path)
+            self.assertEqual(
+                rows,
+                [{"date": "2026-10-06", "merchant": "Coffee Shop", "amount": -12.34}],
+            )
+
     def test_extracts_statement_period(self):
         self.assertEqual(
             parse_bilt_app.extract_statement_period(
@@ -22,6 +56,12 @@ class BiltStatementParserTests(unittest.TestCase):
                 "Billing cycle October 1, 2026 through October 31, 2026"
             ),
             ("2026-10-01", "2026-10-31"),
+        )
+        self.assertEqual(
+            parse_bilt_app.extract_statement_period(
+                "Bilt Palladium Card Sep 27 - Oct 26, 2026"
+            ),
+            ("2026-09-27", "2026-10-26"),
         )
         self.assertEqual(parse_bilt_app.extract_statement_period("No period here"), (None, None))
 
@@ -52,9 +92,8 @@ class BiltStatementParserTests(unittest.TestCase):
             self.assertEqual(
                 rows,
                 [
-                    {"date": "2026-10-05", "merchant": "Payment from bank", "amount": -50.0},
-                    {"date": "2026-10-06", "merchant": "Coffee Shop", "amount": 12.34},
-                    {"date": "2026-10-08", "merchant": "Grocery Mart", "amount": 30.0},
+                    {"date": "2026-10-05", "merchant": "Payment from bank", "amount": 50.0},
+                    {"date": "2026-10-06", "merchant": "Coffee Shop", "amount": -12.34},
                 ],
             )
 
