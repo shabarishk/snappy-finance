@@ -1496,7 +1496,10 @@ export default function App() {
       ) ?? null);
       setMetricsRefreshKey((current) => current + 1);
       const label = transactionCategories.find((category) => category.category_id === categoryID)?.label;
-      if (item.is_statement_import) {
+      if (item.is_statement_import && categoryID && scope === "related" && result.matching_rule_applied) {
+        const count = result.matched_transaction_ids.length;
+        setNotice(`Applied ${label ?? "Other"} to ${count} matching Plaid and statement transaction${count === 1 ? "" : "s"}. Future matches will use this category.`);
+      } else if (item.is_statement_import) {
         setNotice(categoryID
           ? `Categorized historical statement transaction as ${label ?? "Other"}.`
           : "Removed the category from this historical statement transaction.");
@@ -1509,7 +1512,7 @@ export default function App() {
       } else if (result.matching_rule_applied) {
         const count = result.matched_transaction_ids.length;
         const matchScope = item.amount < 0 ? " in this account" : "";
-        setNotice(`Applied ${label ?? "Other"} to ${count} matching transaction${count === 1 ? "" : "s"}. Future matches${matchScope} will use this category.`);
+        setNotice(`Applied ${label ?? "Other"} to ${count} matching Plaid and statement transaction${count === 1 ? "" : "s"}. Future matches${matchScope} will use this category.`);
       } else {
         setNotice(`Categorized this transaction as ${label ?? "Other"}, but no stable description was available to categorize similar transactions.`);
       }
@@ -3053,7 +3056,7 @@ export default function App() {
                 <button className="secondary-button" type="button" onClick={() => applyPendingCategoryChange("single")}>This transaction only</button>
                 <button className="primary-button" type="button" onClick={() => applyPendingCategoryChange("related")}>All related transactions</button>
               </div>
-              <span className="category-scope-help">“All related” also updates future transactions matched by the automated rule.</span>
+              <span className="category-scope-help">“All related” updates matching Plaid and statement transactions, and applies to future matches.</span>
             </section>
           </div>
         )}

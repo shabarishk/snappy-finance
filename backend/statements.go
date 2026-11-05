@@ -558,7 +558,15 @@ func (a *app) reviewImportedStatement(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	tag, err := a.db.Exec(r.Context(), `
+	tx, err := a.db.Begin(r.Context())
+	if err != nil {
+		log.Printf("begin statement review: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not save statement review")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	tag, err := tx.Exec(r.Context(), `
 		UPDATE imported_statements
 		SET review_status=$1, reviewed_at=NOW(), reviewed_by=$2
 		WHERE statement_id=$3 AND review_status='pending_review'`,
@@ -570,7 +578,7 @@ func (a *app) reviewImportedStatement(w http.ResponseWriter, r *http.Request) {
 	}
 	if tag.RowsAffected() == 0 {
 		var currentStatus string
-		err := a.db.QueryRow(r.Context(),
+		err := tx.QueryRow(r.Context(),
 			"SELECT review_status FROM imported_statements WHERE statement_id=$1",
 			r.PathValue("statementID"),
 		).Scan(&currentStatus)
@@ -584,6 +592,31 @@ func (a *app) reviewImportedStatement(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeError(w, http.StatusConflict, "statement has already been reviewed")
+		return
+	}
+	if decision == "approved" {
+		_, err := tx.Exec(r.Context(), `
+			UPDATE statement_import_transactions statement_row
+			SET category_id=category_rule.category_id
+			FROM application_transactions application_txn
+			JOIN transaction_category_rules category_rule
+			  ON category_rule.match_key=application_txn.category_match_key
+			 AND category_rule.category_type=CASE WHEN application_txn.amount < 0 THEN 'income' ELSE 'expense' END
+			WHERE statement_row.statement_id=$1
+			  AND statement_row.match_status='statement_only'
+			  AND statement_row.category_rule_exempt=FALSE
+			  AND application_txn.is_statement_import
+			  AND application_txn.transaction_id = 'statement-import-' || statement_row.statement_transaction_id::text`,
+			r.PathValue("statementID"))
+		if err != nil {
+			log.Printf("apply category rules to approved statement transactions: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not categorize approved statement transactions")
+			return
+		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		log.Printf("commit statement review: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not save statement review")
 		return
 	}
 	summary, err := a.loadImportedStatementSummary(r.Context(), r.PathValue("statementID"))

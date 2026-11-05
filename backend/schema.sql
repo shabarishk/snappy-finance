@@ -382,11 +382,16 @@ CREATE TABLE IF NOT EXISTS statement_import_transactions (
     matched_plaid_merchant TEXT,
     matched_plaid_amount NUMERIC(18, 2),
     category_id TEXT REFERENCES transaction_categories(category_id),
+    category_rule_exempt BOOLEAN NOT NULL DEFAULT FALSE,
     UNIQUE (statement_id, row_number)
 );
 
 ALTER TABLE statement_import_transactions
     ADD COLUMN IF NOT EXISTS category_id TEXT REFERENCES transaction_categories(category_id);
+ALTER TABLE statement_import_transactions
+    ADD COLUMN IF NOT EXISTS category_rule_exempt BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE statement_import_transactions
+    ALTER COLUMN category_rule_exempt SET DEFAULT FALSE;
 CREATE INDEX IF NOT EXISTS statement_import_transactions_category_idx
     ON statement_import_transactions (category_id);
 
@@ -531,7 +536,8 @@ SELECT plaid_txn.transaction_id, plaid_txn.account_id, plaid_txn.name,
        plaid_txn.category_primary, plaid_txn.category_detailed, plaid_txn.iso_currency_code,
        plaid_txn.hidden_from_users, plaid_txn.category_id,
        plaid_txn.category_match_key <> '' AS has_category_match,
-       FALSE AS is_statement_import
+       FALSE AS is_statement_import,
+       plaid_txn.category_match_key
 FROM transactions plaid_txn
 LEFT JOIN approved_statement_aliases aliases
   ON aliases.account_id=plaid_txn.account_id
@@ -546,7 +552,20 @@ SELECT 'statement-import-' || statement_row.statement_transaction_id::text,
        imported_statement.account_id, statement_row.merchant, aliases.merchant_alias,
        -statement_row.amount, statement_row.transaction_date, FALSE,
        NULL::text, NULL::text, account.iso_currency_code, FALSE,
-       statement_row.category_id, FALSE, TRUE
+       statement_row.category_id,
+       transaction_category_match_key(
+           COALESCE(NULLIF(aliases.merchant_alias, ''), statement_row.merchant),
+           statement_row.merchant,
+           imported_statement.account_id,
+           (-statement_row.amount) < 0
+       ) <> '',
+       TRUE,
+       transaction_category_match_key(
+           COALESCE(NULLIF(aliases.merchant_alias, ''), statement_row.merchant),
+           statement_row.merchant,
+           imported_statement.account_id,
+           (-statement_row.amount) < 0
+       )
 FROM statement_import_transactions statement_row
 JOIN imported_statements imported_statement ON imported_statement.statement_id=statement_row.statement_id
 LEFT JOIN accounts account ON account.account_id=imported_statement.account_id

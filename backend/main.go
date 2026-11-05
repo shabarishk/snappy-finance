@@ -623,7 +623,7 @@ func (a *app) updateTransactionCategory(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusBadRequest, "invalid statement transaction")
 			return
 		}
-		a.updateStatementTransactionCategory(w, r, statementTransactionID, categoryID)
+		a.updateStatementTransactionCategory(w, r, statementTransactionID, categoryID, scope)
 		return
 	}
 
@@ -687,55 +687,57 @@ func (a *app) updateTransactionCategory(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	var updateQuery string
-	var updateArgs []any
-	if categoryID == "" {
-		updateQuery = `
-			UPDATE transactions
-			SET category_id = NULL, category_rule_exempt = TRUE
-			WHERE transaction_id = $1
-			RETURNING transaction_id`
-		updateArgs = []any{input.TransactionID}
-	} else if matchKey == "" || scope == "single" {
-		updateQuery = `
-			UPDATE transactions
-			SET category_id = $1, category_rule_exempt = TRUE
-			WHERE transaction_id = $2
-			RETURNING transaction_id`
-		updateArgs = []any{categoryID, input.TransactionID}
-	} else {
-		updateQuery = `
-			UPDATE transactions
-			SET category_id = $1, category_rule_exempt = FALSE
-			WHERE category_match_key = $2 AND (amount < 0) = $3
-			RETURNING transaction_id`
-		updateArgs = []any{categoryID, matchKey, isIncome}
-	}
-
-	rows, err := tx.Query(r.Context(), updateQuery, updateArgs...)
-	if err != nil {
-		log.Printf("apply transaction category: %v", err)
-		writeError(w, http.StatusInternalServerError, "could not update transaction category")
-		return
-	}
 	matchedTransactionIDs := make([]string, 0)
-	for rows.Next() {
-		var transactionID string
-		if err := rows.Scan(&transactionID); err != nil {
-			rows.Close()
-			log.Printf("scan categorized transaction: %v", err)
+	if categoryID != "" && matchKey != "" && scope == "related" {
+		matchedTransactionIDs, err = applyCategoryRuleToTransactions(r.Context(), tx, categoryID, matchKey, isIncome)
+		if err != nil {
+			log.Printf("apply transaction category rule: %v", err)
 			writeError(w, http.StatusInternalServerError, "could not update transaction category")
 			return
 		}
-		matchedTransactionIDs = append(matchedTransactionIDs, transactionID)
-	}
-	if err := rows.Err(); err != nil {
+	} else {
+		var updateQuery string
+		var updateArgs []any
+		if categoryID == "" {
+			updateQuery = `
+				UPDATE transactions
+				SET category_id = NULL, category_rule_exempt = TRUE
+				WHERE transaction_id = $1
+				RETURNING transaction_id`
+			updateArgs = []any{input.TransactionID}
+		} else {
+			updateQuery = `
+				UPDATE transactions
+				SET category_id = $1, category_rule_exempt = TRUE
+				WHERE transaction_id = $2
+				RETURNING transaction_id`
+			updateArgs = []any{categoryID, input.TransactionID}
+		}
+
+		rows, err := tx.Query(r.Context(), updateQuery, updateArgs...)
+		if err != nil {
+			log.Printf("apply transaction category: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not update transaction category")
+			return
+		}
+		for rows.Next() {
+			var transactionID string
+			if err := rows.Scan(&transactionID); err != nil {
+				rows.Close()
+				log.Printf("scan categorized transaction: %v", err)
+				writeError(w, http.StatusInternalServerError, "could not update transaction category")
+				return
+			}
+			matchedTransactionIDs = append(matchedTransactionIDs, transactionID)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			log.Printf("iterate categorized transactions: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not update transaction category")
+			return
+		}
 		rows.Close()
-		log.Printf("iterate categorized transactions: %v", err)
-		writeError(w, http.StatusInternalServerError, "could not update transaction category")
-		return
 	}
-	rows.Close()
 
 	if err := tx.Commit(r.Context()); err != nil {
 		log.Printf("commit transaction category update: %v", err)
@@ -758,7 +760,61 @@ func (a *app) updateTransactionCategory(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-func (a *app) updateStatementTransactionCategory(w http.ResponseWriter, r *http.Request, statementTransactionID int64, categoryID string) {
+func applyCategoryRuleToTransactions(ctx context.Context, tx pgx.Tx, categoryID, matchKey string, isIncome bool) ([]string, error) {
+	matchedTransactionIDs := make([]string, 0)
+	rows, err := tx.Query(ctx, `
+		UPDATE transactions
+		SET category_id=$1, category_rule_exempt=FALSE
+		WHERE category_match_key=$2 AND (amount < 0)=$3
+		RETURNING transaction_id`,
+		categoryID, matchKey, isIncome)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var transactionID string
+		if err := rows.Scan(&transactionID); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		matchedTransactionIDs = append(matchedTransactionIDs, transactionID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	rows, err = tx.Query(ctx, `
+		UPDATE statement_import_transactions statement_row
+		SET category_id=$1, category_rule_exempt=FALSE
+		FROM application_transactions application_txn
+		WHERE application_txn.is_statement_import
+		  AND application_txn.transaction_id = 'statement-import-' || statement_row.statement_transaction_id::text
+		  AND application_txn.category_match_key=$2
+		  AND (application_txn.amount < 0)=$3
+		RETURNING application_txn.transaction_id`,
+		categoryID, matchKey, isIncome)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var transactionID string
+		if err := rows.Scan(&transactionID); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		matchedTransactionIDs = append(matchedTransactionIDs, transactionID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	return matchedTransactionIDs, nil
+}
+
+func (a *app) updateStatementTransactionCategory(w http.ResponseWriter, r *http.Request, statementTransactionID int64, categoryID, scope string) {
 	tx, err := a.db.Begin(r.Context())
 	if err != nil {
 		log.Printf("begin statement transaction category update: %v", err)
@@ -767,17 +823,19 @@ func (a *app) updateStatementTransactionCategory(w http.ResponseWriter, r *http.
 	}
 	defer tx.Rollback(r.Context())
 
-	var reviewStatus, matchStatus string
+	var reviewStatus, matchStatus, matchKey string
 	var isIncome bool
 	err = tx.QueryRow(r.Context(), `
 		SELECT imported_statement.review_status, statement_row.match_status,
-		       -statement_row.amount < 0
+		       application_txn.amount < 0, application_txn.category_match_key
 		FROM statement_import_transactions statement_row
 		JOIN imported_statements imported_statement ON imported_statement.statement_id=statement_row.statement_id
+		JOIN application_transactions application_txn
+		  ON application_txn.transaction_id = 'statement-import-' || statement_row.statement_transaction_id::text
 		WHERE statement_row.statement_transaction_id=$1
 		FOR UPDATE OF statement_row`,
 		statementTransactionID,
-	).Scan(&reviewStatus, &matchStatus, &isIncome)
+	).Scan(&reviewStatus, &matchStatus, &isIncome, &matchKey)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "statement transaction not found")
 		return
@@ -791,8 +849,8 @@ func (a *app) updateStatementTransactionCategory(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusConflict, "only approved statement-only transactions can be categorized")
 		return
 	}
+	categoryType := ""
 	if categoryID != "" {
-		var categoryType string
 		err := tx.QueryRow(r.Context(), `
 			SELECT category_type FROM transaction_categories WHERE category_id=$1`,
 			categoryID,
@@ -811,17 +869,45 @@ func (a *app) updateStatementTransactionCategory(w http.ResponseWriter, r *http.
 			return
 		}
 	}
-	if _, err := tx.Exec(r.Context(), `
-		UPDATE statement_import_transactions
-		SET category_id=NULLIF($1::text, '')
-		WHERE statement_transaction_id=$2`,
-		categoryID, statementTransactionID); err != nil {
-		log.Printf("save statement transaction category: %v", err)
-		writeError(w, http.StatusInternalServerError, "could not update transaction category")
-		return
+
+	matchingRuleApplied := categoryID != "" && matchKey != "" && scope == "related"
+	matchedTransactionIDs := make([]string, 0)
+	if matchingRuleApplied {
+		if _, err := tx.Exec(r.Context(), `
+			INSERT INTO transaction_category_rules (category_type, match_key, category_id)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (category_type, match_key) DO UPDATE
+			SET category_id=EXCLUDED.category_id, updated_at=NOW()`,
+			categoryType, matchKey, categoryID); err != nil {
+			log.Printf("save statement transaction category rule: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not update transaction category")
+			return
+		}
+		matchedTransactionIDs, err = applyCategoryRuleToTransactions(r.Context(), tx, categoryID, matchKey, isIncome)
+		if err != nil {
+			log.Printf("apply statement transaction category rule: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not update transaction category")
+			return
+		}
+	} else {
+		if _, err := tx.Exec(r.Context(), `
+			UPDATE statement_import_transactions
+			SET category_id=NULLIF($1::text, ''), category_rule_exempt=TRUE
+			WHERE statement_transaction_id=$2`,
+			categoryID, statementTransactionID); err != nil {
+			log.Printf("save statement transaction category: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not update transaction category")
+			return
+		}
+		matchedTransactionIDs = append(matchedTransactionIDs, "statement-import-"+strconv.FormatInt(statementTransactionID, 10))
 	}
 	if err := tx.Commit(r.Context()); err != nil {
 		log.Printf("commit statement transaction category: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not update transaction category")
+		return
+	}
+	if err := a.matchInterAccountTransfers(r.Context()); err != nil {
+		log.Printf("refresh inter-account transfer matches after statement category update: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not update transaction category")
 		return
 	}
@@ -831,8 +917,8 @@ func (a *app) updateStatementTransactionCategory(w http.ResponseWriter, r *http.
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"category_id":             resultCategory,
-		"matched_transaction_ids": []string{"statement-import-" + strconv.FormatInt(statementTransactionID, 10)},
-		"matching_rule_applied":   false,
+		"matched_transaction_ids": matchedTransactionIDs,
+		"matching_rule_applied":   matchingRuleApplied,
 	})
 }
 
