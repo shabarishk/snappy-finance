@@ -171,7 +171,7 @@ def extract_rows(
 
     rows = []
     incomplete_rows = 0
-    for section in parse_bilt.SECTIONS[:2]:
+    for section in parse_bilt.SECTIONS:
         for parsed in parsed_sections[section]:
             transaction_date = parsed["Date"]
             if not transaction_date:

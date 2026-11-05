@@ -120,8 +120,9 @@ class BiltStatementParserTests(unittest.TestCase):
             page.insert_text((20, 210), "Oct 08, 2026")
             page.insert_text((180, 210), "Grocery Mart")
             page.insert_text((510, 210), "$30.00")
-            page.insert_text((20, 700), "New Balance: $1,234.56")
-            page.insert_text((20, 725), "Payment Due Date: November 21, 2026")
+            summary_page = document.new_page(width=612, height=792)
+            summary_page.insert_text((20, 60), "New Balance: $1,234.56")
+            summary_page.insert_text((20, 90), "Payment Due Date: November 21, 2026")
             document.save(pdf_path)
             document.close()
 
@@ -133,6 +134,7 @@ class BiltStatementParserTests(unittest.TestCase):
                 [
                     {"date": "2026-10-05", "merchant": "Payment from bank", "amount": 50.0},
                     {"date": "2026-10-06", "merchant": "Coffee Shop", "amount": -12.34},
+                    {"date": "2026-10-08", "merchant": "Grocery Mart", "amount": -30.0},
                 ],
             )
 
