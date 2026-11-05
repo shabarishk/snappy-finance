@@ -414,13 +414,6 @@ func (a *app) uploadAccountStatement(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if _, err := tx.Exec(r.Context(),
-			"DELETE FROM statement_import_transactions WHERE statement_id=$1",
-			statementID); err != nil {
-			log.Printf("delete old statement transaction rows: %v", err)
-			writeError(w, http.StatusInternalServerError, "could not refresh the existing statement import")
-			return
-		}
-		if _, err := tx.Exec(r.Context(),
 			"DELETE FROM statement_reconciliation_issues WHERE statement_id=$1",
 			statementID); err != nil {
 			log.Printf("delete old statement reconciliation issues: %v", err)
@@ -461,7 +454,16 @@ func (a *app) uploadAccountStatement(w http.ResponseWriter, r *http.Request) {
 				statement_id, row_number, transaction_date, merchant, amount, match_status,
 				matched_plaid_transaction_id, matched_plaid_date, matched_plaid_merchant,
 				matched_plaid_amount
-			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+			ON CONFLICT (statement_id, row_number) DO UPDATE SET
+				transaction_date=EXCLUDED.transaction_date,
+				merchant=EXCLUDED.merchant,
+				amount=EXCLUDED.amount,
+				match_status=EXCLUDED.match_status,
+				matched_plaid_transaction_id=EXCLUDED.matched_plaid_transaction_id,
+				matched_plaid_date=EXCLUDED.matched_plaid_date,
+				matched_plaid_merchant=EXCLUDED.matched_plaid_merchant,
+				matched_plaid_amount=EXCLUDED.matched_plaid_amount`,
 			statementID, index+1, row.Date, strings.TrimSpace(row.Merchant), row.Amount, match.Status,
 			matchedID, matchedDate, matchedMerchant, matchedAmount)
 		if err != nil {
@@ -469,6 +471,40 @@ func (a *app) uploadAccountStatement(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "could not save statement transactions")
 			return
 		}
+	}
+	if _, err := tx.Exec(r.Context(), `
+		DELETE FROM subscription_payment_history history
+		WHERE history.transaction_id IN (
+			SELECT 'statement-import-' || statement_row.statement_transaction_id::text
+			FROM statement_import_transactions statement_row
+			WHERE statement_row.statement_id=$1
+			  AND (statement_row.row_number > $2 OR statement_row.match_status='matched')
+		)`,
+		statementID, len(parsed.Transactions)); err != nil {
+		log.Printf("remove stale statement subscription payment history: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not refresh statement transaction history")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+		DELETE FROM subscription_increase_reviews review
+		WHERE review.transaction_id IN (
+			SELECT 'statement-import-' || statement_row.statement_transaction_id::text
+			FROM statement_import_transactions statement_row
+			WHERE statement_row.statement_id=$1
+			  AND (statement_row.row_number > $2 OR statement_row.match_status='matched')
+		)`,
+		statementID, len(parsed.Transactions)); err != nil {
+		log.Printf("remove stale statement subscription increase reviews: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not refresh statement transaction history")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+		DELETE FROM statement_import_transactions
+		WHERE statement_id=$1 AND row_number > $2`,
+		statementID, len(parsed.Transactions)); err != nil {
+		log.Printf("remove obsolete statement transactions: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not refresh statement transactions")
+		return
 	}
 	for _, candidate := range candidates {
 		transactionDate, _ := time.Parse("2006-01-02", candidate.Date)
@@ -817,6 +853,21 @@ func (a *app) matchImportedStatementTransaction(w http.ResponseWriter, r *http.R
 		r.PathValue("statementID"), statementTransactionID)
 	if err != nil {
 		log.Printf("save manual statement match: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not save statement match")
+		return
+	}
+	statementTransactionKey := "statement-import-" + strconv.FormatInt(statementTransactionID, 10)
+	if _, err := tx.Exec(r.Context(),
+		"DELETE FROM subscription_payment_history WHERE transaction_id=$1",
+		statementTransactionKey); err != nil {
+		log.Printf("remove subscription history for matched statement row: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not save statement match")
+		return
+	}
+	if _, err := tx.Exec(r.Context(),
+		"DELETE FROM subscription_increase_reviews WHERE transaction_id=$1",
+		statementTransactionKey); err != nil {
+		log.Printf("remove subscription increase review for matched statement row: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not save statement match")
 		return
 	}

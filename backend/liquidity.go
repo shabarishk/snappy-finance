@@ -76,7 +76,7 @@ func (a *app) getDashboardLiquidityTransactions(w http.ResponseWriter, r *http.R
 			txn.amount, COALESCE(account.official_name, account.name), txn.iso_currency_code,
 			account.type, cycle.statement_close_day, cycle.statement_due_day,
 			category.label, txn.category_detailed, txn.category_primary
-		FROM transactions txn
+		FROM application_transactions txn
 		JOIN accounts account USING (account_id)
 		LEFT JOIN credit_card_cycles cycle USING (account_id)
 		LEFT JOIN transaction_categories category ON category.category_id = txn.category_id
@@ -227,7 +227,7 @@ func (a *app) getDashboardLiquidity(w http.ResponseWriter, r *http.Request) {
 		SELECT txn.transaction_date::text, txn.amount, account.type,
 			cycle.statement_close_day, cycle.statement_due_day,
 			category.label, txn.category_detailed, txn.category_primary
-		FROM transactions txn
+		FROM application_transactions txn
 		JOIN accounts account USING (account_id)
 		LEFT JOIN credit_card_cycles cycle USING (account_id)
 		LEFT JOIN transaction_categories category ON category.category_id = txn.category_id

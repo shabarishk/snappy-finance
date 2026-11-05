@@ -477,57 +477,11 @@ func (a *app) listTransactions(w http.ResponseWriter, r *http.Request) {
 	}
 	isAdmin := currentPrincipal(r).Role == "admin"
 	query := `
-		WITH approved_statement_aliases AS (
-			SELECT DISTINCT ON (
-				s.account_id,
-				REGEXP_REPLACE(LOWER(sit.merchant), '[^a-z0-9]', '', 'g')
-			)
-				s.account_id,
-				REGEXP_REPLACE(LOWER(sit.merchant), '[^a-z0-9]', '', 'g') AS merchant_key,
-				BTRIM(sit.matched_plaid_merchant) AS merchant_alias
-			FROM statement_import_transactions sit
-			JOIN imported_statements s ON s.statement_id=sit.statement_id
-			WHERE s.review_status='approved'
-			  AND sit.match_status='matched'
-			  AND NULLIF(BTRIM(sit.matched_plaid_merchant), '') IS NOT NULL
-			ORDER BY s.account_id,
-			         REGEXP_REPLACE(LOWER(sit.merchant), '[^a-z0-9]', '', 'g'),
-			         s.reviewed_at DESC NULLS LAST,
-			         sit.statement_transaction_id DESC
-		),
-		all_transactions AS (
-			SELECT t.transaction_id, t.account_id, t.name,
-			       COALESCE(NULLIF(t.merchant_name, ''), aliases.merchant_alias) AS merchant_name,
-			       t.amount, t.transaction_date, t.pending, t.category_primary, t.category_detailed,
-			       t.iso_currency_code, t.hidden_from_users, t.category_id,
-			       t.category_match_key <> '' AS has_category_match,
-			       FALSE AS is_statement_import
-			FROM transactions t
-			LEFT JOIN approved_statement_aliases aliases
-			  ON aliases.account_id=t.account_id
-			 AND aliases.merchant_key=REGEXP_REPLACE(LOWER(COALESCE(NULLIF(t.merchant_name, ''), t.name)), '[^a-z0-9]', '', 'g')
-			WHERE ($1 OR NOT t.hidden_from_users)
-
-			UNION ALL
-
-			SELECT 'statement-import-' || sit.statement_transaction_id::text,
-			       s.account_id, sit.merchant, aliases.merchant_alias, -sit.amount,
-			       sit.transaction_date, FALSE, NULL::text, NULL::text, a.iso_currency_code,
-			       FALSE, NULL::text, FALSE, TRUE
-			FROM statement_import_transactions sit
-			JOIN imported_statements s ON s.statement_id=sit.statement_id
-			LEFT JOIN accounts a ON a.account_id=s.account_id
-			LEFT JOIN approved_statement_aliases aliases
-			  ON aliases.account_id=s.account_id
-			 AND aliases.merchant_key=REGEXP_REPLACE(LOWER(sit.merchant), '[^a-z0-9]', '', 'g')
-			WHERE s.review_status='approved'
-			  AND sit.match_status='statement_only'
-		)
 		SELECT transaction_id, account_id, name, merchant_name, amount, transaction_date::text,
 		       pending, category_primary, category_detailed, iso_currency_code, hidden_from_users,
 		       category_id, has_category_match, is_statement_import
-		FROM all_transactions
-		WHERE TRUE`
+		FROM application_transactions
+		WHERE ($1 OR NOT hidden_from_users)`
 	args := []any{isAdmin}
 	if fromDate != "" {
 		query += fmt.Sprintf(" AND transaction_date >= $%d::date", len(args)+1)
@@ -663,6 +617,15 @@ func (a *app) updateTransactionCategory(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "category scope must be single or related")
 		return
 	}
+	if strings.HasPrefix(input.TransactionID, "statement-import-") {
+		statementTransactionID, err := strconv.ParseInt(strings.TrimPrefix(input.TransactionID, "statement-import-"), 10, 64)
+		if err != nil || statementTransactionID < 1 {
+			writeError(w, http.StatusBadRequest, "invalid statement transaction")
+			return
+		}
+		a.updateStatementTransactionCategory(w, r, statementTransactionID, categoryID)
+		return
+	}
 
 	tx, err := a.db.Begin(r.Context())
 	if err != nil {
@@ -792,6 +755,84 @@ func (a *app) updateTransactionCategory(w http.ResponseWriter, r *http.Request) 
 		"category_id":             result,
 		"matched_transaction_ids": matchedTransactionIDs,
 		"matching_rule_applied":   categoryID != "" && matchKey != "" && scope == "related",
+	})
+}
+
+func (a *app) updateStatementTransactionCategory(w http.ResponseWriter, r *http.Request, statementTransactionID int64, categoryID string) {
+	tx, err := a.db.Begin(r.Context())
+	if err != nil {
+		log.Printf("begin statement transaction category update: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not update transaction category")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	var reviewStatus, matchStatus string
+	var isIncome bool
+	err = tx.QueryRow(r.Context(), `
+		SELECT imported_statement.review_status, statement_row.match_status,
+		       -statement_row.amount < 0
+		FROM statement_import_transactions statement_row
+		JOIN imported_statements imported_statement ON imported_statement.statement_id=statement_row.statement_id
+		WHERE statement_row.statement_transaction_id=$1
+		FOR UPDATE OF statement_row`,
+		statementTransactionID,
+	).Scan(&reviewStatus, &matchStatus, &isIncome)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "statement transaction not found")
+		return
+	}
+	if err != nil {
+		log.Printf("load statement transaction for category update: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not update transaction category")
+		return
+	}
+	if reviewStatus != "approved" || matchStatus != "statement_only" {
+		writeError(w, http.StatusConflict, "only approved statement-only transactions can be categorized")
+		return
+	}
+	if categoryID != "" {
+		var categoryType string
+		err := tx.QueryRow(r.Context(), `
+			SELECT category_type FROM transaction_categories WHERE category_id=$1`,
+			categoryID,
+		).Scan(&categoryType)
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusBadRequest, "unknown transaction category")
+			return
+		}
+		if err != nil {
+			log.Printf("load statement transaction category: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not update transaction category")
+			return
+		}
+		if (categoryType == "income") != isIncome {
+			writeError(w, http.StatusBadRequest, "category type does not match transaction amount")
+			return
+		}
+	}
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE statement_import_transactions
+		SET category_id=NULLIF($1::text, '')
+		WHERE statement_transaction_id=$2`,
+		categoryID, statementTransactionID); err != nil {
+		log.Printf("save statement transaction category: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not update transaction category")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		log.Printf("commit statement transaction category: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not update transaction category")
+		return
+	}
+	var resultCategory *string
+	if categoryID != "" {
+		resultCategory = &categoryID
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"category_id":             resultCategory,
+		"matched_transaction_ids": []string{"statement-import-" + strconv.FormatInt(statementTransactionID, 10)},
+		"matching_rule_applied":   false,
 	})
 }
 

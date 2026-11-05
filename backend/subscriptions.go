@@ -147,7 +147,7 @@ func (a *app) getSubscriptionTracker(w http.ResponseWriter, r *http.Request) {
 						  AND history.due_date = $6
 					) AS previously_matched,
 					COALESCE(account.official_name, account.name, '')
-				FROM transactions txn
+				FROM application_transactions txn
 				LEFT JOIN accounts account USING (account_id)
 				WHERE txn.pending = FALSE
 				  AND (
@@ -291,7 +291,7 @@ func (a *app) getSubscriptionTracker(w http.ResponseWriter, r *http.Request) {
 			history.due_date::text, history.payment_date::text, history.amount
 		FROM subscription_payment_history history
 		JOIN scheduled_projection_expenses expense ON expense.expense_id = history.expense_id
-		LEFT JOIN transactions txn ON txn.transaction_id = history.transaction_id
+		JOIN application_transactions txn ON txn.transaction_id = history.transaction_id
 		LEFT JOIN accounts account ON account.account_id = txn.account_id
 		ORDER BY history.payment_date DESC, history.history_id DESC
 		LIMIT 12`)
@@ -399,7 +399,7 @@ func (a *app) resolveSubscriptionIncrease(w http.ResponseWriter, r *http.Request
 			INSERT INTO subscription_amount_history
 				(expense_id, amount, effective_date, change_type)
 			SELECT $1, $2, transaction_date, 'confirmed_increase'
-			FROM transactions WHERE transaction_id = $3
+			FROM application_transactions WHERE transaction_id = $3
 			ON CONFLICT DO NOTHING`, expenseID, observedAmount, transactionID); err != nil {
 			log.Printf("record confirmed subscription increase: %v", err)
 			writeError(w, http.StatusInternalServerError, "could not record subscription amount history")

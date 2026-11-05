@@ -1494,8 +1494,13 @@ export default function App() {
           ? { ...transaction, category_id: result.category_id }
           : transaction,
       ) ?? null);
+      setMetricsRefreshKey((current) => current + 1);
       const label = transactionCategories.find((category) => category.category_id === categoryID)?.label;
-      if (!categoryID) {
+      if (item.is_statement_import) {
+        setNotice(categoryID
+          ? `Categorized historical statement transaction as ${label ?? "Other"}.`
+          : "Removed the category from this historical statement transaction.");
+      } else if (!categoryID) {
         setNotice("Using the bank category for this transaction. Similar transactions remain categorized automatically.");
       } else if (scope === "single") {
         setNotice(item.has_category_match
@@ -1892,9 +1897,11 @@ export default function App() {
                   <span className={`transaction-icon ${item.amount < 0 ? "income-icon" : ""}`}>{item.amount < 0 ? <ArrowDownLeft size={17} /> : <ArrowUpRight size={17} />}</span>
                   <div className="transaction-info"><strong>{item.merchant_name || item.name}</strong><span>{transactionCategories.find((category) => category.category_id === item.category_id)?.label || item.category_detailed || item.category_primary || "Uncategorized"} · {new Date(`${item.date}T12:00:00`).toLocaleDateString()} · {accountsByID.get(item.account_id)?.official_name || accountsByID.get(item.account_id)?.name || "Unknown account"}{item.is_statement_import ? " · Statement history" : ""}</span></div>
                   <strong className={item.amount < 0 ? "positive-text" : ""}>{item.amount < 0 ? "+" : "−"}{money(Math.abs(item.amount), item.iso_currency_code)}{item.pending && <small className="pending"> Pending</small>}</strong>
-                  {!item.is_statement_import && (profile?.role === "admin" || (item.amount > 0 && ["depository", "credit"].includes(accountsByID.get(item.account_id)?.type.toLowerCase() ?? ""))) && (
+                  {(item.is_statement_import
+                    ? profile?.role === "admin"
+                    : profile?.role === "admin" || (item.amount > 0 && ["depository", "credit"].includes(accountsByID.get(item.account_id)?.type.toLowerCase() ?? ""))) && (
                     <div className="transaction-actions">
-                      {item.amount > 0 && ["depository", "credit"].includes(accountsByID.get(item.account_id)?.type.toLowerCase() ?? "") && (
+                      {!item.is_statement_import && item.amount > 0 && ["depository", "credit"].includes(accountsByID.get(item.account_id)?.type.toLowerCase() ?? "") && (
                         <label className="transaction-liquidity-toggle" title="Only affects your liquidity chart and forecast">
                           <input
                             type="checkbox"
@@ -1911,21 +1918,23 @@ export default function App() {
                           aria-label={`Category for ${item.merchant_name || item.name}`}
                           onChange={(event) => requestTransactionCategoryChange(item, event.target.value)}
                         >
-                          <option value="">Bank category</option>
+                          <option value="">{item.is_statement_import ? "Uncategorized" : "Bank category"}</option>
                           {transactionCategories.filter((category) => category.category_type === (item.amount < 0 ? "income" : "expense")).map((category) => (
                             <option key={category.category_id} value={category.category_id}>{category.label}</option>
                           ))}
                         </select>
-                        <button
-                          type="button"
-                          className="visibility-button"
-                          onClick={() => void setTransactionVisibility(item)}
-                          aria-label={item.hidden_from_users ? "Show transaction to household users" : "Hide transaction from household users"}
-                          title={item.hidden_from_users ? "Show to household users" : "Hide from household users"}
-                        >
-                          {item.hidden_from_users ? <Eye size={15} /> : <EyeOff size={15} />}
-                          <span>{item.hidden_from_users ? "Show" : "Hide"}</span>
-                        </button>
+                        {!item.is_statement_import && (
+                          <button
+                            type="button"
+                            className="visibility-button"
+                            onClick={() => void setTransactionVisibility(item)}
+                            aria-label={item.hidden_from_users ? "Show transaction to household users" : "Hide transaction from household users"}
+                            title={item.hidden_from_users ? "Show to household users" : "Hide from household users"}
+                          >
+                            {item.hidden_from_users ? <Eye size={15} /> : <EyeOff size={15} />}
+                            <span>{item.hidden_from_users ? "Show" : "Hide"}</span>
+                          </button>
+                        )}
                       </>}
                     </div>
                   )}

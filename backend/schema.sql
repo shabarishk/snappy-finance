@@ -381,8 +381,14 @@ CREATE TABLE IF NOT EXISTS statement_import_transactions (
     matched_plaid_date DATE,
     matched_plaid_merchant TEXT,
     matched_plaid_amount NUMERIC(18, 2),
+    category_id TEXT REFERENCES transaction_categories(category_id),
     UNIQUE (statement_id, row_number)
 );
+
+ALTER TABLE statement_import_transactions
+    ADD COLUMN IF NOT EXISTS category_id TEXT REFERENCES transaction_categories(category_id);
+CREATE INDEX IF NOT EXISTS statement_import_transactions_category_idx
+    ON statement_import_transactions (category_id);
 
 CREATE TABLE IF NOT EXISTS statement_reconciliation_issues (
     discrepancy_id BIGSERIAL PRIMARY KEY,
@@ -475,7 +481,7 @@ CREATE INDEX IF NOT EXISTS transactions_transfer_amount_date_idx ON transactions
 CREATE TABLE IF NOT EXISTS subscription_payment_history (
     history_id BIGSERIAL PRIMARY KEY,
     expense_id BIGINT NOT NULL REFERENCES scheduled_projection_expenses(expense_id) ON DELETE CASCADE,
-    transaction_id TEXT NOT NULL REFERENCES transactions(transaction_id) ON DELETE CASCADE,
+    transaction_id TEXT NOT NULL,
     due_date DATE NOT NULL,
     payment_date DATE NOT NULL,
     amount NUMERIC(18, 4) NOT NULL,
@@ -486,7 +492,7 @@ CREATE TABLE IF NOT EXISTS subscription_payment_history (
 CREATE TABLE IF NOT EXISTS subscription_increase_reviews (
     review_id BIGSERIAL PRIMARY KEY,
     expense_id BIGINT NOT NULL REFERENCES scheduled_projection_expenses(expense_id) ON DELETE CASCADE,
-    transaction_id TEXT NOT NULL REFERENCES transactions(transaction_id) ON DELETE CASCADE,
+    transaction_id TEXT NOT NULL,
     previous_amount NUMERIC(18, 4) NOT NULL,
     observed_amount NUMERIC(18, 4) NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'dismissed')),
@@ -494,3 +500,58 @@ CREATE TABLE IF NOT EXISTS subscription_increase_reviews (
     resolved_at TIMESTAMPTZ,
     UNIQUE (expense_id, transaction_id)
 );
+
+ALTER TABLE subscription_payment_history
+    DROP CONSTRAINT IF EXISTS subscription_payment_history_transaction_id_fkey;
+ALTER TABLE subscription_increase_reviews
+    DROP CONSTRAINT IF EXISTS subscription_increase_reviews_transaction_id_fkey;
+
+CREATE OR REPLACE VIEW application_transactions AS
+WITH approved_statement_aliases AS (
+    SELECT DISTINCT ON (
+        imported_statement.account_id,
+        REGEXP_REPLACE(LOWER(statement_row.merchant), '[^a-z0-9]', '', 'g')
+    )
+        imported_statement.account_id,
+        REGEXP_REPLACE(LOWER(statement_row.merchant), '[^a-z0-9]', '', 'g') AS merchant_key,
+        BTRIM(statement_row.matched_plaid_merchant) AS merchant_alias
+    FROM statement_import_transactions statement_row
+    JOIN imported_statements imported_statement ON imported_statement.statement_id=statement_row.statement_id
+    WHERE imported_statement.review_status='approved'
+      AND statement_row.match_status='matched'
+      AND NULLIF(BTRIM(statement_row.matched_plaid_merchant), '') IS NOT NULL
+    ORDER BY imported_statement.account_id,
+             REGEXP_REPLACE(LOWER(statement_row.merchant), '[^a-z0-9]', '', 'g'),
+             imported_statement.reviewed_at DESC NULLS LAST,
+             statement_row.statement_transaction_id DESC
+)
+SELECT plaid_txn.transaction_id, plaid_txn.account_id, plaid_txn.name,
+       COALESCE(NULLIF(plaid_txn.merchant_name, ''), aliases.merchant_alias) AS merchant_name,
+       plaid_txn.amount, plaid_txn.transaction_date, plaid_txn.pending,
+       plaid_txn.category_primary, plaid_txn.category_detailed, plaid_txn.iso_currency_code,
+       plaid_txn.hidden_from_users, plaid_txn.category_id,
+       plaid_txn.category_match_key <> '' AS has_category_match,
+       FALSE AS is_statement_import
+FROM transactions plaid_txn
+LEFT JOIN approved_statement_aliases aliases
+  ON aliases.account_id=plaid_txn.account_id
+ AND aliases.merchant_key=REGEXP_REPLACE(
+     LOWER(COALESCE(NULLIF(plaid_txn.merchant_name, ''), plaid_txn.name)),
+     '[^a-z0-9]', '', 'g'
+ )
+
+UNION ALL
+
+SELECT 'statement-import-' || statement_row.statement_transaction_id::text,
+       imported_statement.account_id, statement_row.merchant, aliases.merchant_alias,
+       -statement_row.amount, statement_row.transaction_date, FALSE,
+       NULL::text, NULL::text, account.iso_currency_code, FALSE,
+       statement_row.category_id, FALSE, TRUE
+FROM statement_import_transactions statement_row
+JOIN imported_statements imported_statement ON imported_statement.statement_id=statement_row.statement_id
+LEFT JOIN accounts account ON account.account_id=imported_statement.account_id
+LEFT JOIN approved_statement_aliases aliases
+  ON aliases.account_id=imported_statement.account_id
+ AND aliases.merchant_key=REGEXP_REPLACE(LOWER(statement_row.merchant), '[^a-z0-9]', '', 'g')
+WHERE imported_statement.review_status='approved'
+  AND statement_row.match_status='statement_only';
