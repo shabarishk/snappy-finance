@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, Banknote, ChevronDown, ChevronLeft, ChevronRight, Eye, EyeOff, Filter, Landmark, LockKeyhole, LogOut, Menu, RefreshCw, UsersRound, Wallet, X } from "lucide-react";
+import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, Banknote, ChevronDown, ChevronLeft, ChevronRight, Eye, EyeOff, FileText, Filter, Landmark, LockKeyhole, LogOut, Menu, RefreshCw, UsersRound, Wallet, X } from "lucide-react";
 
 type Profile = {
   id: string;
@@ -215,6 +215,7 @@ type ImportedStatementSummary = {
   period_start: string;
   period_end: string;
   statement_balance: number | null;
+  minimum_payment_due: number | null;
   payment_due_date?: string;
   imported_at: string;
   transaction_count: number;
@@ -510,14 +511,29 @@ function displayDate(date: string, options: Intl.DateTimeFormatOptions = { month
   return new Date(year, month - 1, day).toLocaleDateString(undefined, options);
 }
 
+function statementIsLatestOnFile(statement: ImportedStatementSummary, account?: Account) {
+  const closeDay = account?.statement_close_day ?? Number(statement.period_end.slice(8, 10));
+  const today = new Date();
+  let year = today.getFullYear();
+  let month = today.getMonth();
+  if (today.getDate() < closeDay) month -= 1;
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  const expectedClose = new Date(year, month, Math.min(closeDay, lastDay));
+  const oldestCurrentStatementDate = transactionDateKey(
+    new Date(expectedClose.getFullYear(), expectedClose.getMonth(), expectedClose.getDate() - 2),
+  );
+  return statement.period_end >= oldestCurrentStatementDate;
+}
+
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [activePage, setActivePage] = useState<"overview" | "accounts" | "administration" | "transactions" | "projections">(() => {
+  const [activePage, setActivePage] = useState<"overview" | "accounts" | "administration" | "transactions" | "projections" | "statements">(() => {
     if (window.location.hash === "#accounts") return "accounts";
     if (window.location.hash === "#administration") return "administration";
     if (window.location.hash === "#transactions") return "transactions";
     if (window.location.hash === "#projections") return "projections";
+    if (window.location.hash === "#statements") return "statements";
     return "overview";
   });
   const [adminSection, setAdminSection] = useState<"users" | "finance">("users");
@@ -561,6 +577,8 @@ export default function App() {
   const [statementImports, setStatementImports] = useState<ImportedStatementSummary[]>([]);
   const [statementDetails, setStatementDetails] = useState<Record<string, ImportedStatementDetail>>({});
   const [expandedStatementID, setExpandedStatementID] = useState<string | null>(null);
+  const [statementAccountViewID, setStatementAccountViewID] = useState<string | null>(null);
+  const [statementUploadOpen, setStatementUploadOpen] = useState(false);
   const [statementDetailLoadingID, setStatementDetailLoadingID] = useState<string | null>(null);
   const [statementDetailError, setStatementDetailError] = useState("");
   const [statementMatchSelections, setStatementMatchSelections] = useState<Record<number, string>>({});
@@ -621,6 +639,7 @@ export default function App() {
       else if (window.location.hash === "#administration") setActivePage("administration");
       else if (window.location.hash === "#transactions") setActivePage("transactions");
       else if (window.location.hash === "#projections") setActivePage("projections");
+      else if (window.location.hash === "#statements") setActivePage("statements");
       else setActivePage("overview");
     };
     window.addEventListener("hashchange", syncPageFromHash);
@@ -632,6 +651,10 @@ export default function App() {
     if (activePage !== "transactions") setTransactionFiltersOpen(false);
     if (activePage !== "projections") setProjectionAssumptionsOpen(false);
     if (activePage !== "projections") setScheduledExpensesOpen(false);
+    if (activePage !== "statements") {
+      setStatementUploadOpen(false);
+      setExpandedStatementID(null);
+    }
   }, [activePage]);
 
   useEffect(() => {
@@ -670,7 +693,7 @@ export default function App() {
   }, [monthPickerOpen]);
 
   useEffect(() => {
-    if (!sidebarOpen && !dashboardPreferencesOpen && !transactionFiltersOpen && !projectionAssumptionsOpen && !scheduledExpensesOpen && !pendingCategoryChange && !liquidityTransactionsDialog) return;
+    if (!sidebarOpen && !dashboardPreferencesOpen && !transactionFiltersOpen && !projectionAssumptionsOpen && !scheduledExpensesOpen && !pendingCategoryChange && !liquidityTransactionsDialog && !statementUploadOpen && !expandedStatementID) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setSidebarOpen(false);
@@ -680,6 +703,8 @@ export default function App() {
         setScheduledExpensesOpen(false);
         setPendingCategoryChange(null);
         setLiquidityTransactionsDialog(null);
+        setStatementUploadOpen(false);
+        setExpandedStatementID(null);
       }
     };
     const previousOverflow = document.body.style.overflow;
@@ -689,9 +714,9 @@ export default function App() {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [dashboardPreferencesOpen, liquidityTransactionsDialog, pendingCategoryChange, projectionAssumptionsOpen, scheduledExpensesOpen, sidebarOpen, transactionFiltersOpen]);
+  }, [dashboardPreferencesOpen, expandedStatementID, liquidityTransactionsDialog, pendingCategoryChange, projectionAssumptionsOpen, scheduledExpensesOpen, sidebarOpen, statementUploadOpen, transactionFiltersOpen]);
 
-  function navigateToPage(page: "overview" | "accounts" | "administration" | "transactions" | "projections") {
+  function navigateToPage(page: "overview" | "accounts" | "administration" | "transactions" | "projections" | "statements") {
     setActivePage(page);
     setSidebarOpen(false);
     setDashboardPreferencesOpen(false);
@@ -699,6 +724,9 @@ export default function App() {
     setProjectionAssumptionsOpen(false);
     setScheduledExpensesOpen(false);
     setMonthPickerOpen(false);
+    setStatementAccountViewID(null);
+    setExpandedStatementID(null);
+    setStatementUploadOpen(false);
     if (window.location.hash !== `#${page}`) window.location.hash = page;
   }
 
@@ -1085,17 +1113,50 @@ export default function App() {
     ? 0
     : (currentTransactionPage - 1) * transactionPageSize + 1;
   const lastTransactionNumber = Math.min(currentTransactionPage * transactionPageSize, visibleTransactions.length);
+  const statementsByAccount = useMemo(() => {
+    const grouped = new Map<string, ImportedStatementSummary[]>();
+    for (const statement of statementImports) {
+      const current = grouped.get(statement.account_id) ?? [];
+      current.push(statement);
+      grouped.set(statement.account_id, current);
+    }
+    return Array.from(grouped, ([accountID, statements]) => {
+      const sortedStatements = statements.sort((left, right) =>
+        right.period_end.localeCompare(left.period_end) ||
+        Date.parse(right.imported_at) - Date.parse(left.imported_at),
+      );
+      return {
+        accountID,
+        account: accounts.find((account) => account.account_id === accountID),
+        accountName: sortedStatements[0].account_name,
+        statements: sortedStatements,
+        latest: sortedStatements[0],
+      };
+    }).sort((left, right) => left.accountName.localeCompare(right.accountName));
+  }, [accounts, statementImports]);
+  const visibleStatementHistory = useMemo(() => {
+    const source = statementAccountViewID
+      ? statementsByAccount.find((item) => item.accountID === statementAccountViewID)?.statements ?? []
+      : statementImports;
+    return [...source].sort((left, right) =>
+      right.period_end.localeCompare(left.period_end) ||
+      Date.parse(right.imported_at) - Date.parse(left.imported_at),
+    );
+  }, [statementAccountViewID, statementImports, statementsByAccount]);
+  const viewedStatementAccount = statementsByAccount.find((item) => item.accountID === statementAccountViewID);
 
   const pageTitle = activePage === "administration"
     ? "Administration"
     : activePage === "accounts" ? "Accounts"
       : activePage === "transactions" ? "Transactions"
-        : activePage === "projections" ? "Projections" : "Overview";
+        : activePage === "projections" ? "Projections"
+          : activePage === "statements" ? "Statements" : "Overview";
   const pageEyebrow = activePage === "accounts"
     ? "CONNECTED ACCOUNTS"
     : activePage === "administration"
     ? "ADMINISTRATION"
-    : activePage === "projections" ? "INCOME FORECAST" : "YOUR FINANCES";
+    : activePage === "projections" ? "INCOME FORECAST"
+      : activePage === "statements" ? "STATEMENT HISTORY" : "YOUR FINANCES";
   const currentSpendMonth = getCurrentSpendMonth(new Date(), spendMonthStartDay);
   const currentPeriodLabel = statisticsPeriod === "spend"
     ? selectedOverviewMonth === currentSpendMonth ? "THIS CYCLE" : "SPEND CYCLE"
@@ -1312,6 +1373,7 @@ export default function App() {
       setStatementFileInputKey((current) => current + 1);
       setStatementUploadPeriodStart("");
       setStatementUploadPeriodEnd("");
+      setStatementUploadOpen(false);
       setExpandedStatementID(imported.statement_id);
       setNotice(
         `${imported.reprocessed ? "Statement reprocessed and reset to awaiting review." : "Statement processed."} ` +
@@ -1328,10 +1390,6 @@ export default function App() {
   }
 
   async function loadStatementDetails(statementID: string, forceReload = false) {
-    if (!forceReload && expandedStatementID === statementID) {
-      setExpandedStatementID(null);
-      return;
-    }
     setExpandedStatementID(statementID);
     setStatementDetailError("");
     if (!forceReload && statementDetails[statementID]) return;
@@ -1973,39 +2031,106 @@ export default function App() {
     </section>
   );
 
+  const statementsAccountPanel = (
+    <section className="statement-account-grid" aria-label="Accounts with statements">
+      {statementsByAccount.length === 0 ? (
+        <div className="panel empty-state">
+          <strong>No statements have been imported yet</strong>
+          <span>Uploaded statements will be grouped here by account.</span>
+        </div>
+      ) : statementsByAccount.map((group) => {
+        const latest = group.latest;
+        const hasLatest = statementIsLatestOnFile(latest, group.account);
+        return (
+          <article className="panel statement-account-card" key={group.accountID}>
+            <header className="statement-account-card-heading">
+              <div><span className="statement-account-icon"><FileText size={17} /></span><h2>{group.accountName}</h2></div>
+              <span className={`statement-freshness ${hasLatest ? "current" : "missing"}`}>
+                {hasLatest ? "Latest statement on file" : "Latest statement missing"}
+              </span>
+            </header>
+            <div
+              role="button"
+              tabIndex={0}
+              className="statement-latest-summary"
+              onClick={() => void loadStatementDetails(latest.statement_id)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  void loadStatementDetails(latest.statement_id);
+                }
+              }}
+              aria-label={`Open latest available statement for ${group.accountName}`}
+            >
+              <span className="statement-latest-label">Most recent statement on file</span>
+              <dl className="statement-metadata-grid">
+                <div><dt>Statement date</dt><dd>{displayDate(latest.period_end)}</dd></div>
+                <div><dt>Payment due</dt><dd>{latest.payment_due_date ? displayDate(latest.payment_due_date) : "Not detected"}</dd></div>
+                <div><dt>Statement balance</dt><dd>{money(latest.statement_balance)}</dd></div>
+                <div><dt>Minimum payment due</dt><dd>{money(latest.minimum_payment_due)}</dd></div>
+              </dl>
+              <span className="statement-open-hint">{latest.transaction_count} transactions · Click to view statement</span>
+            </div>
+            <button
+              type="button"
+              className="secondary-button statement-show-all"
+              onClick={() => setStatementAccountViewID(group.accountID)}
+            >Show all Statements <ChevronRight size={15} /><span>({group.statements.length})</span></button>
+          </article>
+        );
+      })}
+    </section>
+  );
+
   const statementHistoryPanel = (
     <section className="panel statement-history-panel">
-      <div className="panel-heading">
-        <div><h2>Statement history</h2><p>Statement records remain available even when Plaid no longer returns older transactions.</p></div>
+      <div className="panel-heading statement-history-page-heading">
+        <div>
+          {viewedStatementAccount && (
+            <button type="button" className="statement-back-button" onClick={() => setStatementAccountViewID(null)}>
+              <ChevronLeft size={15} /> All statement accounts
+            </button>
+          )}
+          <h2>{viewedStatementAccount ? `${viewedStatementAccount.accountName} statements` : "All statements"}</h2>
+          <p>Statement records remain available even when Plaid no longer returns older transactions.</p>
+        </div>
       </div>
-      {statementImports.length === 0 ? (
+      {visibleStatementHistory.length === 0 ? (
         <div className="empty-state compact">No statements have been imported yet.</div>
       ) : (
         <div className="statement-import-list">
-          {statementImports.map((statement) => {
-            const details = statementDetails[statement.statement_id];
-            const expanded = expandedStatementID === statement.statement_id;
-            return (
-              <article className="statement-import-card" key={statement.statement_id}>
+          {visibleStatementHistory.map((statement) => (
+            <article className="statement-import-card statement-history-row" key={statement.statement_id}>
+              <div
+                role="button"
+                tabIndex={0}
+                className="statement-history-main"
+                onClick={() => void loadStatementDetails(statement.statement_id)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    void loadStatementDetails(statement.statement_id);
+                  }
+                }}
+                aria-label={`Open ${statement.account_name} statement ending ${displayDate(statement.period_end)}`}
+              >
                 <header className="statement-import-heading">
                   <div>
                     <strong>{statement.account_name}</strong>
                     <span>{displayDate(statement.period_start)} – {displayDate(statement.period_end)} · Imported {new Date(statement.imported_at).toLocaleDateString()}</span>
-                    <span className={`statement-review-status status-${statement.review_status}`}>
-                      {statement.review_status === "pending_review"
-                        ? "Awaiting review"
-                        : statement.review_status === "approved" ? "Approved" : "Rejected"}
-                    </span>
                   </div>
-                  <div className="statement-import-actions">
-                    <button type="button" className="secondary-button" onClick={() => void loadStatementDetails(statement.statement_id)}>
-                      {expanded ? "Hide review" : statement.review_status === "pending_review" ? "Review spreadsheet" : "Reconciliation"}
-                    </button>
-                    <button type="button" className="secondary-button" onClick={() => void downloadStatementSpreadsheet(statement.statement_id)}>
-                      Download spreadsheet
-                    </button>
-                  </div>
+                  <span className={`statement-review-status status-${statement.review_status}`}>
+                    {statement.review_status === "pending_review"
+                      ? "Awaiting review"
+                      : statement.review_status === "approved" ? "Approved" : "Rejected"}
+                  </span>
                 </header>
+                <dl className="statement-metadata-grid statement-history-metadata">
+                  <div><dt>Statement date</dt><dd>{displayDate(statement.period_end)}</dd></div>
+                  <div><dt>Payment due</dt><dd>{statement.payment_due_date ? displayDate(statement.payment_due_date) : "Not detected"}</dd></div>
+                  <div><dt>Statement balance</dt><dd>{money(statement.statement_balance)}</dd></div>
+                  <div><dt>Minimum payment due</dt><dd>{money(statement.minimum_payment_due)}</dd></div>
+                </dl>
                 <div className="statement-import-summary">
                   <span>{statement.transaction_count} statement transactions</span>
                   <span className="statement-match-count">{statement.matched_count} matched</span>
@@ -2013,119 +2138,238 @@ export default function App() {
                   {statement.plaid_only_count > 0 && <span className="statement-discrepancy-count">{statement.plaid_only_count} Plaid-only</span>}
                   {statement.ambiguous_count + statement.ambiguous_plaid_count > 0 && <span className="statement-ambiguous-count">{statement.ambiguous_count + statement.ambiguous_plaid_count} ambiguous</span>}
                 </div>
-                <p className="statement-balance-review">
-                  {statement.statement_balance !== null && statement.statement_balance !== undefined
-                    ? `Detected statement balance ${money(statement.statement_balance)}${statement.payment_due_date ? ` due ${displayDate(statement.payment_due_date)}` : "; payment due date not detected, so this balance will not be added to Financial Management"}. ${statement.review_status === "approved" && statement.payment_due_date ? "This approved balance is used in Financial Management and overrides a manual entry for the same due date." : statement.review_status === "pending_review" && statement.payment_due_date ? "Approving this statement will apply the balance and override any manual entry for the same due date." : ""}`
-                    : "No statement balance was detected; approving this statement will not change Financial Management balances."}
-                </p>
-                {expanded && (
-                  <div className="statement-import-details">
-                    {statementDetailLoadingID === statement.statement_id ? (
-                      <div className="empty-state compact">Loading reconciliation…</div>
-                    ) : statementDetailError ? (
-                      <p className="error-message" role="alert">{statementDetailError}</p>
-                    ) : details ? (
-                      <>
-                        <h3>Generated spreadsheet preview</h3>
-                        <div className="statement-spreadsheet-preview">
-                          <table>
-                            <thead><tr><th>Date</th><th>Merchant</th><th>Amount</th></tr></thead>
-                            <tbody>
-                              {details.transactions.map((transaction) => (
-                                <tr key={transaction.statement_transaction_id}>
-                                  <td>{displayDate(transaction.date)}</td>
-                                  <td>{transaction.merchant}</td>
-                                  <td>{money(transaction.amount)}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                        <h3>Reconciliation with Plaid</h3>
-                        <p className="statement-match-guidance">Unmatched statement rows can be paired with any unmatched Plaid transaction from this statement. Manually selected matches may have different dates or amounts, so verify the pair before matching.</p>
-                        <div className="statement-detail-list">
-                          {details.transactions.map((transaction) => (
-                            <div className={`statement-detail-row ${transaction.match_status !== "matched" ? "statement-detail-discrepancy" : ""}`} key={transaction.statement_transaction_id}>
-                              <div>
-                                <strong>{transaction.merchant}</strong>
-                                <span>{displayDate(transaction.date)} · {transaction.match_status === "matched"
-                                  ? `Matched to ${transaction.matched_plaid_merchant || "Plaid transaction"} on ${transaction.matched_plaid_date ? displayDate(transaction.matched_plaid_date) : "unknown date"}${transaction.matched_plaid_amount !== null ? ` · Plaid amount ${money(Math.abs(transaction.matched_plaid_amount))}` : ""}`
-                                  : transaction.match_status === "ambiguous" ? "Multiple possible Plaid matches" : "No matching Plaid transaction"}</span>
-                                {statement.review_status === "pending_review" && transaction.match_status !== "matched" && transaction.candidates.length > 0 && (
-                                  <div className="statement-manual-match">
-                                    <label>
-                                      Match to Plaid transaction
-                                      <select
-                                        value={statementMatchSelections[transaction.statement_transaction_id] ?? ""}
-                                        onChange={(event) => setStatementMatchSelections((current) => ({
-                                          ...current,
-                                          [transaction.statement_transaction_id]: event.target.value,
-                                        }))}
-                                      >
-                                        <option value="">Select a transaction</option>
-                                        {transaction.candidates.map((candidate) => (
-                                          <option key={candidate.transaction_id} value={candidate.transaction_id}>
-                                            {candidate.merchant} · {displayDate(candidate.date)} · {money(candidate.amount)}
-                                          </option>
-                                        ))}
-                                      </select>
-                                    </label>
-                                    <button
-                                      type="button"
-                                      className="secondary-button"
-                                      disabled={!statementMatchSelections[transaction.statement_transaction_id] || matchingStatementTransactionID !== null}
-                                      onClick={() => void matchStatementTransaction(statement.statement_id, transaction.statement_transaction_id)}
-                                    >{matchingStatementTransactionID === transaction.statement_transaction_id ? "Matching…" : "Match"}</button>
-                                  </div>
-                                )}
-                              </div>
-                              <strong>{money(transaction.amount)}</strong>
-                            </div>
-                          ))}
-                        </div>
-                        {details.discrepancies.length > 0 && (
-                          <>
-                            <h3>Plaid transactions needing review</h3>
-                            <div className="statement-detail-list">
-                              {details.discrepancies.map((discrepancy) => (
-                                <div className="statement-detail-row statement-detail-discrepancy" key={discrepancy.discrepancy_id}>
-                                  <div>
-                                    <strong>{discrepancy.merchant}</strong>
-                                    <span>{displayDate(discrepancy.date)} · {discrepancy.issue_type === "ambiguous_plaid" ? "Possible duplicate match" : "Not present on the statement"}</span>
-                                  </div>
-                                  <strong>{money(discrepancy.amount)}</strong>
-                                </div>
-                              ))}
-                            </div>
-                          </>
-                        )}
-                        {statement.review_status === "pending_review" && (
-                          <div className="statement-review-actions">
-                            <span>Review the spreadsheet and reconciliation, then choose an outcome.</span>
-                            <button
-                              type="button"
-                              className="primary-button"
-                              disabled={reviewingStatementID === statement.statement_id}
-                              onClick={() => void reviewImportedStatement(statement.statement_id, "approved")}
-                            >{reviewingStatementID === statement.statement_id ? "Saving…" : "Approve statement"}</button>
-                            <button
-                              type="button"
-                              className="secondary-button statement-reject-button"
-                              disabled={reviewingStatementID === statement.statement_id}
-                              onClick={() => void reviewImportedStatement(statement.statement_id, "rejected")}
-                            >Reject statement</button>
-                          </div>
-                        )}
-                      </>
-                    ) : null}
-                  </div>
-                )}
-              </article>
-            );
-          })}
+              </div>
+              <button
+                type="button"
+                className="secondary-button statement-download-button"
+                onClick={() => void downloadStatementSpreadsheet(statement.statement_id)}
+              >Download spreadsheet</button>
+            </article>
+          ))}
         </div>
       )}
     </section>
+  );
+
+  const selectedStatement = statementImports.find((item) => item.statement_id === expandedStatementID);
+  const selectedStatementDetails = expandedStatementID ? statementDetails[expandedStatementID] : undefined;
+  const statementDetailsDialog = activePage === "statements" && selectedStatement ? (
+    <div
+      className="statement-detail-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) setExpandedStatementID(null);
+      }}
+    >
+      <section className="statement-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="statement-detail-title">
+        <header className="statement-detail-dialog-heading">
+          <div>
+            <p className="eyebrow">STATEMENT DETAILS</p>
+            <h2 id="statement-detail-title">{selectedStatement.account_name}</h2>
+            <p>{displayDate(selectedStatement.period_start)} – {displayDate(selectedStatement.period_end)}</p>
+          </div>
+          <button type="button" className="preferences-drawer-close" aria-label="Close statement details" onClick={() => setExpandedStatementID(null)}>
+            <X size={18} />
+          </button>
+        </header>
+        <div className="statement-dialog-summary">
+          <span className={`statement-review-status status-${selectedStatement.review_status}`}>
+            {selectedStatement.review_status === "pending_review"
+              ? "Awaiting review"
+              : selectedStatement.review_status === "approved" ? "Approved" : "Rejected"}
+          </span>
+          <dl className="statement-metadata-grid">
+            <div><dt>Statement date</dt><dd>{displayDate(selectedStatement.period_end)}</dd></div>
+            <div><dt>Payment due</dt><dd>{selectedStatement.payment_due_date ? displayDate(selectedStatement.payment_due_date) : "Not detected"}</dd></div>
+            <div><dt>Statement balance</dt><dd>{money(selectedStatement.statement_balance)}</dd></div>
+            <div><dt>Minimum payment due</dt><dd>{money(selectedStatement.minimum_payment_due)}</dd></div>
+          </dl>
+          <p className="statement-balance-review">
+            {selectedStatement.statement_balance !== null && selectedStatement.statement_balance !== undefined
+              ? `Detected statement balance ${money(selectedStatement.statement_balance)}${selectedStatement.payment_due_date ? ` due ${displayDate(selectedStatement.payment_due_date)}` : "; payment due date not detected, so this balance will not be added to Financial Management"}. ${selectedStatement.review_status === "approved" && selectedStatement.payment_due_date ? "This approved balance is used in Financial Management and overrides a manual entry for the same due date." : selectedStatement.review_status === "pending_review" && selectedStatement.payment_due_date ? "Approving this statement will apply the balance and override any manual entry for the same due date." : ""}`
+              : "No statement balance was detected; approving this statement will not change Financial Management balances."}
+          </p>
+        </div>
+        {statementDetailLoadingID === selectedStatement.statement_id ? (
+          <div className="empty-state compact">Loading statement transactions…</div>
+        ) : statementDetailError ? (
+          <p className="error-message" role="alert">{statementDetailError}</p>
+        ) : selectedStatementDetails ? (
+          <div className="statement-import-details">
+            <h3>Transactions during statement period</h3>
+            <div className="statement-spreadsheet-preview">
+              <table>
+                <thead><tr><th>Date</th><th>Merchant</th><th>Amount</th></tr></thead>
+                <tbody>
+                  {selectedStatementDetails.transactions.map((transaction) => (
+                    <tr key={transaction.statement_transaction_id}>
+                      <td>{displayDate(transaction.date)}</td>
+                      <td>{transaction.merchant}</td>
+                      <td>{money(transaction.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <h3>Reconciliation with Plaid</h3>
+            <p className="statement-match-guidance">Unmatched statement rows can be paired with any unmatched Plaid transaction from this statement. Manually selected matches may have different dates or amounts, so verify the pair before matching.</p>
+            <div className="statement-detail-list">
+              {selectedStatementDetails.transactions.map((transaction) => (
+                <div className={`statement-detail-row ${transaction.match_status !== "matched" ? "statement-detail-discrepancy" : ""}`} key={transaction.statement_transaction_id}>
+                  <div>
+                    <strong>{transaction.merchant}</strong>
+                    <span>{displayDate(transaction.date)} · {transaction.match_status === "matched"
+                      ? `Matched to ${transaction.matched_plaid_merchant || "Plaid transaction"} on ${transaction.matched_plaid_date ? displayDate(transaction.matched_plaid_date) : "unknown date"}${transaction.matched_plaid_amount !== null ? ` · Plaid amount ${money(Math.abs(transaction.matched_plaid_amount))}` : ""}`
+                      : transaction.match_status === "ambiguous" ? "Multiple possible Plaid matches" : "No matching Plaid transaction"}</span>
+                    {profile?.role === "admin" && selectedStatement.review_status === "pending_review" && transaction.match_status !== "matched" && transaction.candidates.length > 0 && (
+                      <div className="statement-manual-match">
+                        <label>
+                          Match to Plaid transaction
+                          <select
+                            value={statementMatchSelections[transaction.statement_transaction_id] ?? ""}
+                            onChange={(event) => setStatementMatchSelections((current) => ({
+                              ...current,
+                              [transaction.statement_transaction_id]: event.target.value,
+                            }))}
+                          >
+                            <option value="">Select a transaction</option>
+                            {transaction.candidates.map((candidate) => (
+                              <option key={candidate.transaction_id} value={candidate.transaction_id}>
+                                {candidate.merchant} · {displayDate(candidate.date)} · {money(candidate.amount)}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          disabled={!statementMatchSelections[transaction.statement_transaction_id] || matchingStatementTransactionID !== null}
+                          onClick={() => void matchStatementTransaction(selectedStatement.statement_id, transaction.statement_transaction_id)}
+                        >{matchingStatementTransactionID === transaction.statement_transaction_id ? "Matching…" : "Match"}</button>
+                      </div>
+                    )}
+                  </div>
+                  <strong>{money(transaction.amount)}</strong>
+                </div>
+              ))}
+            </div>
+            {selectedStatementDetails.discrepancies.length > 0 && (
+              <>
+                <h3>Plaid transactions needing review</h3>
+                <div className="statement-detail-list">
+                  {selectedStatementDetails.discrepancies.map((discrepancy) => (
+                    <div className="statement-detail-row statement-detail-discrepancy" key={discrepancy.discrepancy_id}>
+                      <div>
+                        <strong>{discrepancy.merchant}</strong>
+                        <span>{displayDate(discrepancy.date)} · {discrepancy.issue_type === "ambiguous_plaid" ? "Possible duplicate match" : "Not present on the statement"}</span>
+                      </div>
+                      <strong>{money(discrepancy.amount)}</strong>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        ) : null}
+        <footer className="statement-dialog-actions">
+          <button type="button" className="secondary-button" onClick={() => void downloadStatementSpreadsheet(selectedStatement.statement_id)}>
+            Download spreadsheet
+          </button>
+          {profile?.role === "admin" && selectedStatement.review_status === "pending_review" && (
+            <>
+              <span>Review the transactions and reconciliation, then choose an outcome.</span>
+              <button
+                type="button"
+                className="primary-button"
+                disabled={reviewingStatementID === selectedStatement.statement_id}
+                onClick={() => void reviewImportedStatement(selectedStatement.statement_id, "approved")}
+              >{reviewingStatementID === selectedStatement.statement_id ? "Saving…" : "Approve statement"}</button>
+              <button
+                type="button"
+                className="secondary-button statement-reject-button"
+                disabled={reviewingStatementID === selectedStatement.statement_id}
+                onClick={() => void reviewImportedStatement(selectedStatement.statement_id, "rejected")}
+              >Reject statement</button>
+            </>
+          )}
+        </footer>
+      </section>
+    </div>
+  ) : null;
+
+  const statementUploadDrawer = (
+    <>
+      <button
+        type="button"
+        className={`statement-upload-backdrop ${statementUploadOpen ? "visible" : ""}`}
+        aria-label="Close statement upload"
+        aria-hidden={!statementUploadOpen}
+        tabIndex={statementUploadOpen ? 0 : -1}
+        onClick={() => setStatementUploadOpen(false)}
+      />
+      <aside
+        className={`statement-upload-drawer ${statementUploadOpen ? "open" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-hidden={!statementUploadOpen}
+        aria-labelledby="statement-upload-title"
+      >
+        <div className="panel-heading preferences-drawer-heading">
+          <div><h2 id="statement-upload-title">Add statement</h2><p>Upload a PDF statement to review and reconcile its transactions.</p></div>
+          <button type="button" className="preferences-drawer-close" aria-label="Close statement upload" onClick={() => setStatementUploadOpen(false)}>
+            <X size={18} />
+          </button>
+        </div>
+        {accounts.some((account) => account.statement_parser_id && !account.demo_data) ? (
+          <form className="statement-upload-form" onSubmit={(event) => void submitStatementUpload(event)}>
+            <label>
+              Account
+              <select
+                value={statementUploadAccountID}
+                onChange={(event) => setStatementUploadAccountID(event.target.value)}
+                required
+              >
+                <option value="">Choose account</option>
+                {accounts.filter((account) => account.statement_parser_id && !account.demo_data).map((account) => (
+                  <option key={account.account_id} value={account.account_id}>
+                    {account.official_name || account.name}{account.mask ? ` ···· ${account.mask}` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Statement PDF
+              <input
+                key={statementFileInputKey}
+                type="file"
+                accept="application/pdf,.pdf"
+                onChange={(event) => setStatementUploadFile(event.target.files?.[0] ?? null)}
+                required
+              />
+            </label>
+            <label>
+              Period start (optional)
+              <input type="date" value={statementUploadPeriodStart} onChange={(event) => setStatementUploadPeriodStart(event.target.value)} />
+            </label>
+            <label>
+              Period end (optional)
+              <input type="date" value={statementUploadPeriodEnd} onChange={(event) => setStatementUploadPeriodEnd(event.target.value)} />
+            </label>
+            <p className="statement-upload-help">Leave both dates blank for automatic detection. If the parser cannot read the period, provide both dates.</p>
+            <button className="primary-button" type="submit" disabled={uploadingStatement || !statementParsers.length || !accounts.some((account) => account.account_id === statementUploadAccountID && account.statement_parser_id)}>
+              {uploadingStatement ? "Parsing and reconciling…" : "Import statement"}
+            </button>
+          </form>
+        ) : (
+          <div className="empty-state compact">
+            <strong>No accounts are ready for statements</strong>
+            <span>Assign a statement parser to an account in Accounts before uploading.</span>
+            <button type="button" className="secondary-button" onClick={() => navigateToPage("accounts")}>Go to Accounts</button>
+          </div>
+        )}
+        <p className="finance-help">The PDF is deleted after processing; the extracted statement, reconciliation, and spreadsheet remain available.</p>
+      </aside>
+    </>
   );
 
   async function createProfile(event: React.FormEvent<HTMLFormElement>) {
@@ -2856,52 +3100,6 @@ export default function App() {
               );
             })}
           </div>
-          {profile?.role === "admin" && (
-            <section className="statement-upload-panel">
-              <div>
-                <h3>Import a statement</h3>
-                <p>Choose an account with a parser assigned. The PDF is deleted after processing; the extracted transactions and spreadsheet are retained.</p>
-              </div>
-              <form className="statement-upload-form" onSubmit={(event) => void submitStatementUpload(event)}>
-                <label>
-                  Account
-                  <select
-                    value={statementUploadAccountID}
-                    onChange={(event) => setStatementUploadAccountID(event.target.value)}
-                    required
-                  >
-                    <option value="">Choose account</option>
-                    {accounts.filter((account) => account.statement_parser_id && !account.demo_data).map((account) => (
-                      <option key={account.account_id} value={account.account_id}>
-                        {account.official_name || account.name}{account.mask ? ` ···· ${account.mask}` : ""}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Statement PDF
-                  <input
-                    key={statementFileInputKey}
-                    type="file"
-                    accept="application/pdf,.pdf"
-                    onChange={(event) => setStatementUploadFile(event.target.files?.[0] ?? null)}
-                    required
-                  />
-                </label>
-                <label>
-                  Period start (optional)
-                  <input type="date" value={statementUploadPeriodStart} onChange={(event) => setStatementUploadPeriodStart(event.target.value)} />
-                </label>
-                <label>
-                  Period end (optional)
-                  <input type="date" value={statementUploadPeriodEnd} onChange={(event) => setStatementUploadPeriodEnd(event.target.value)} />
-                </label>
-                <button className="primary-button" type="submit" disabled={uploadingStatement || !statementParsers.length || !accounts.some((account) => account.account_id === statementUploadAccountID && account.statement_parser_id)}>
-                  {uploadingStatement ? "Parsing and reconciling…" : "Import statement"}
-                </button>
-              </form>
-            </section>
-          )}
         </>
       )}
     </section>
@@ -2960,6 +3158,11 @@ export default function App() {
             onClick={() => navigateToPage("accounts")}
             aria-current={activePage === "accounts" ? "page" : undefined}
           ><Landmark size={18} /> Accounts</button>
+          <button
+            className={`nav-item ${activePage === "statements" ? "active" : ""}`}
+            onClick={() => navigateToPage("statements")}
+            aria-current={activePage === "statements" ? "page" : undefined}
+          ><FileText size={18} /> Statements</button>
           <button
             className={`nav-item ${activePage === "projections" ? "active" : ""}`}
             onClick={() => navigateToPage("projections")}
@@ -3087,6 +3290,11 @@ export default function App() {
                 <span>+</span> Connect account
               </button>
             </>}
+            {activePage === "statements" && profile?.role === "admin" && (
+              <button className="primary-button" onClick={() => setStatementUploadOpen(true)}>
+                <span>+</span> Add statement
+              </button>
+            )}
           </div>
         </header>
 
@@ -3353,13 +3561,20 @@ export default function App() {
               )}
             </>
           ) : passwordPanel
+        ) : activePage === "statements" ? (
+          <>
+            {statementAccountViewID ? (
+              statementHistoryPanel
+            ) : statementsAccountPanel}
+            {statementUploadDrawer}
+            {statementDetailsDialog}
+          </>
         ) : activePage === "transactions" ? (
           <>
             {accounts.some((account) => account.demo_data) && (
               <div className="alert demo-banner">Demo data — these fictional accounts and transactions are for local testing only.</div>
             )}
             {transactionsPanel}
-            {statementHistoryPanel}
             <button
               type="button"
               className={`dashboard-preferences-backdrop ${transactionFiltersOpen ? "visible" : ""}`}

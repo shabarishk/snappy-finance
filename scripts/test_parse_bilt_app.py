@@ -38,7 +38,7 @@ class BiltStatementParserTests(unittest.TestCase):
             document.save(pdf_path)
             document.close()
 
-            _, _, _, _, rows = parse_bilt_app.extract_rows(pdf_path)
+            _, _, _, _, _, rows = parse_bilt_app.extract_rows(pdf_path)
             self.assertEqual(
                 rows,
                 [{"date": "2026-10-06", "merchant": "Coffee Shop", "amount": -12.34}],
@@ -62,7 +62,7 @@ class BiltStatementParserTests(unittest.TestCase):
             document.save(pdf_path)
             document.close()
 
-            _, _, _, _, rows = parse_bilt_app.extract_rows(pdf_path)
+            _, _, _, _, _, rows = parse_bilt_app.extract_rows(pdf_path)
             self.assertEqual(
                 rows,
                 [{"date": "2026-09-29", "merchant": "At boundary", "amount": -10.0}],
@@ -94,11 +94,18 @@ class BiltStatementParserTests(unittest.TestCase):
             parse_bilt_app.extract_statement_balance(
                 "New Balance: $1,234.56 Payment Due Date: November 21, 2026"
             ),
-            (1234.56, "2026-11-21"),
+            (1234.56, None, "2026-11-21"),
         )
         self.assertEqual(
             parse_bilt_app.extract_statement_balance("No balance or due date"),
-            (None, None),
+            (None, None, None),
+        )
+        self.assertEqual(
+            parse_bilt_app.extract_statement_balance(
+                "New Balance: $1,234.56 Minimum Payment Due: $25.00 "
+                "Payment Due Date: November 21, 2026"
+            ),
+            (1234.56, 25.0, "2026-11-21"),
         )
 
     def test_extracts_standardized_transactions_and_spreadsheet(self):
@@ -126,9 +133,9 @@ class BiltStatementParserTests(unittest.TestCase):
             document.save(pdf_path)
             document.close()
 
-            start, end, balance, due_date, rows = parse_bilt_app.extract_rows(pdf_path)
+            start, end, balance, minimum_due, due_date, rows = parse_bilt_app.extract_rows(pdf_path)
             self.assertEqual((start, end), ("2026-10-01", "2026-10-31"))
-            self.assertEqual((balance, due_date), (1234.56, "2026-11-21"))
+            self.assertEqual((balance, minimum_due, due_date), (1234.56, None, "2026-11-21"))
             self.assertEqual(
                 rows,
                 [

@@ -31,6 +31,10 @@ STATEMENT_BALANCE_PATTERN = re.compile(
     r"\s*:?\s*\$?\s*((?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2})",
     re.IGNORECASE,
 )
+MINIMUM_PAYMENT_DUE_PATTERN = re.compile(
+    r"\bminimum\s+payment\s+due\b\s*:?\s*\$?\s*((?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2})",
+    re.IGNORECASE,
+)
 PAYMENT_DUE_DATE_PATTERN = re.compile(
     r"\bpayment\s+due\s+date\b\s*:?\s*(\d{1,2}/\d{1,2}/\d{2,4})",
     re.IGNORECASE,
@@ -80,13 +84,19 @@ def extract_statement_period(text: str) -> tuple[str | None, str | None]:
     return start.date().isoformat(), end.date().isoformat()
 
 
-def extract_statement_balance(text: str) -> tuple[float | None, str | None]:
+def extract_statement_balance(text: str) -> tuple[float | None, float | None, str | None]:
     normalized_text = re.sub(r"\s+", " ", text)
     balance_match = STATEMENT_BALANCE_PATTERN.search(normalized_text)
+    minimum_payment_match = MINIMUM_PAYMENT_DUE_PATTERN.search(normalized_text)
     due_date_match = PAYMENT_DUE_DATE_PATTERN.search(normalized_text)
     balance = (
         float(balance_match.group(1).replace(",", ""))
         if balance_match
+        else None
+    )
+    minimum_payment_due = (
+        float(minimum_payment_match.group(1).replace(",", ""))
+        if minimum_payment_match
         else None
     )
     due_date = (
@@ -94,7 +104,7 @@ def extract_statement_balance(text: str) -> tuple[float | None, str | None]:
         if due_date_match
         else None
     )
-    return balance, due_date
+    return balance, minimum_payment_due, due_date
 
 
 def parse_transaction_date(text: str, statement_date: datetime) -> datetime | None:
@@ -154,11 +164,13 @@ def extract_statement(
     pdf_path: Path,
     override_start: str | None = None,
     override_end: str | None = None,
-) -> tuple[str | None, str | None, float | None, str | None, list[dict[str, Any]]]:
+) -> tuple[str | None, str | None, float | None, float | None, str | None, list[dict[str, Any]]]:
     with pymupdf.open(pdf_path) as document:
         statement_text = " ".join(page.get_text() for page in document)
         period_start, period_end = extract_statement_period(statement_text)
-        statement_balance, payment_due_date = extract_statement_balance(statement_text)
+        statement_balance, minimum_payment_due, payment_due_date = extract_statement_balance(
+            statement_text
+        )
 
         if override_start or override_end:
             if not override_start or not override_end:
@@ -328,7 +340,14 @@ def extract_statement(
         for row in included_rows
     ]
     transactions.sort(key=lambda row: (row["date"], row["merchant"], row["amount"]))
-    return period_start, period_end, statement_balance, payment_due_date, transactions
+    return (
+        period_start,
+        period_end,
+        statement_balance,
+        minimum_payment_due,
+        payment_due_date,
+        transactions,
+    )
 
 
 def parse_iso_date(value: str, label: str) -> datetime:
@@ -339,7 +358,7 @@ def parse_iso_date(value: str, label: str) -> datetime:
 
 
 def extract_transactions(pdf_path: Path) -> list[dict[str, Any]]:
-    _, _, _, _, rows = extract_statement(pdf_path)
+    _, _, _, _, _, rows = extract_statement(pdf_path)
     return [
         {
             "Date": datetime.strptime(row["date"], "%Y-%m-%d"),
@@ -386,9 +405,14 @@ def main() -> int:
     parser.add_argument("--period-end")
     args = parser.parse_args()
     try:
-        period_start, period_end, statement_balance, payment_due_date, rows = extract_statement(
-            args.input, args.period_start, args.period_end
-        )
+        (
+            period_start,
+            period_end,
+            statement_balance,
+            minimum_payment_due,
+            payment_due_date,
+            rows,
+        ) = extract_statement(args.input, args.period_start, args.period_end)
         write_workbook(args.spreadsheet_output, rows)
         args.json_output.parent.mkdir(parents=True, exist_ok=True)
         args.json_output.write_text(
@@ -397,6 +421,7 @@ def main() -> int:
                     "period_start": period_start,
                     "period_end": period_end,
                     "statement_balance": statement_balance,
+                    "minimum_payment_due": minimum_payment_due,
                     "payment_due_date": payment_due_date,
                     "transactions": rows,
                 }

@@ -21,8 +21,10 @@ class ChaseStatementParserTests(unittest.TestCase):
         page.insert_text((20, 80), "11/04/26")
         page.insert_text((20, 100), "New Balance:")
         page.insert_text((20, 115), "$1,234.56")
-        page.insert_text((20, 135), "Payment Due Date:")
-        page.insert_text((20, 150), "11/25/26")
+        page.insert_text((20, 135), "Minimum Payment Due:")
+        page.insert_text((20, 150), "$25.00")
+        page.insert_text((20, 170), "Payment Due Date:")
+        page.insert_text((20, 185), "11/25/26")
 
         page.insert_text((20, 190), "ACCOUNT ACTIVITY")
         page.insert_text((20, 220), "PAYMENTS AND OTHER CREDITS")
@@ -48,10 +50,10 @@ class ChaseStatementParserTests(unittest.TestCase):
             pdf_path = Path(temporary_directory) / "chase.pdf"
             self.create_statement(pdf_path)
 
-            start, end, balance, due_date, rows = parse_chase.extract_statement(pdf_path)
+            start, end, balance, minimum_due, due_date, rows = parse_chase.extract_statement(pdf_path)
 
             self.assertEqual((start, end), ("2026-10-05", "2026-11-04"))
-            self.assertEqual((balance, due_date), (1234.56, "2026-11-25"))
+            self.assertEqual((balance, minimum_due, due_date), (1234.56, 25.0, "2026-11-25"))
             self.assertEqual(
                 rows,
                 [
@@ -66,7 +68,7 @@ class ChaseStatementParserTests(unittest.TestCase):
             pdf_path = Path(temporary_directory) / "chase.pdf"
             self.create_statement(pdf_path, include_period=False)
 
-            start, end, _, _, _ = parse_chase.extract_statement(
+            start, end, _, _, _, _ = parse_chase.extract_statement(
                 pdf_path, "2026-10-05", "2026-11-04"
             )
 
@@ -97,6 +99,9 @@ class ChaseStatementParserTests(unittest.TestCase):
             parsed = json.loads(json_path.read_text(encoding="utf-8"))
             self.assertEqual(parsed["period_start"], "2026-10-05")
             self.assertEqual(parsed["period_end"], "2026-11-04")
+            self.assertEqual(parsed["statement_balance"], 1234.56)
+            self.assertEqual(parsed["minimum_payment_due"], 25.0)
+            self.assertEqual(parsed["payment_due_date"], "2026-11-25")
             self.assertEqual(len(parsed["transactions"]), 3)
 
             worksheet = load_workbook(spreadsheet_path, data_only=True)["Transactions"]

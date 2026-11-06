@@ -47,6 +47,11 @@ STATEMENT_BALANCE_PATTERN = re.compile(
     r"\s*:?\s*\$?\s*((?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2})",
     re.IGNORECASE,
 )
+MINIMUM_PAYMENT_DUE_PATTERN = re.compile(
+    r"\bminimum\s+payment\s+due\b"
+    r"\s*:?\s*\$?\s*((?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2})",
+    re.IGNORECASE,
+)
 PAYMENT_DUE_DATE_PATTERN = re.compile(
     rf"\b(?:payment\s+due\s+date|payment\s+due|due\s+date)\b"
     rf"\s*:?\s*(?:is\s+)?({DATE_TEXT})",
@@ -127,33 +132,39 @@ def extract_statement_period(text: str) -> tuple[str | None, str | None]:
     return start.date().isoformat(), end.date().isoformat()
 
 
-def extract_statement_balance(text: str) -> tuple[float | None, str | None]:
+def extract_statement_balance(text: str) -> tuple[float | None, float | None, str | None]:
     normalized_text = re.sub(r"\s+", " ", text)
     balance_match = STATEMENT_BALANCE_PATTERN.search(normalized_text)
+    minimum_payment_match = MINIMUM_PAYMENT_DUE_PATTERN.search(normalized_text)
     due_date_match = PAYMENT_DUE_DATE_PATTERN.search(normalized_text)
     balance = None
+    minimum_payment_due = None
     due_date = None
     if balance_match:
         balance = float(balance_match.group(1).replace(",", ""))
+    if minimum_payment_match:
+        minimum_payment_due = float(minimum_payment_match.group(1).replace(",", ""))
     if due_date_match:
         parsed_due_date = parse_period_date(due_date_match.group(1))
         if parsed_due_date:
             due_date = parsed_due_date.date().isoformat()
-    return balance, due_date
+    return balance, minimum_payment_due, due_date
 
 
 def extract_rows(
     pdf_path: Path,
     override_start: str | None = None,
     override_end: str | None = None,
-) -> tuple[str | None, str | None, float | None, str | None, list[dict[str, Any]]]:
+) -> tuple[str | None, str | None, float | None, float | None, str | None, list[dict[str, Any]]]:
     OCR_WORDS.clear()
     parsed_sections = parse_bilt.extract_transactions(pdf_path)
     with pymupdf.open(pdf_path) as document:
         statement_text = " ".join(page.get_text() for page in document)
     statement_text += " " + " ".join(str(entry["text"]) for entry in OCR_WORDS)
     period_start, period_end = extract_statement_period(statement_text)
-    statement_balance, payment_due_date = extract_statement_balance(statement_text)
+    statement_balance, minimum_payment_due, payment_due_date = extract_statement_balance(
+        statement_text
+    )
     if override_start or override_end:
         if not override_start or not override_end:
             raise RuntimeError("Both statement period dates must be provided.")
@@ -202,7 +213,14 @@ def extract_rows(
     if not rows:
         raise RuntimeError("No complete transactions were found in this Bilt statement.")
     rows.sort(key=lambda row: (row["date"], row["merchant"], row["amount"]))
-    return period_start, period_end, statement_balance, payment_due_date, rows
+    return (
+        period_start,
+        period_end,
+        statement_balance,
+        minimum_payment_due,
+        payment_due_date,
+        rows,
+    )
 
 
 def write_spreadsheet(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -238,9 +256,14 @@ def main() -> int:
 
     parse_bilt.windows_ocr = tesseract_ocr
     try:
-        period_start, period_end, statement_balance, payment_due_date, rows = extract_rows(
-            args.input, args.period_start, args.period_end
-        )
+        (
+            period_start,
+            period_end,
+            statement_balance,
+            minimum_payment_due,
+            payment_due_date,
+            rows,
+        ) = extract_rows(args.input, args.period_start, args.period_end)
         write_spreadsheet(args.spreadsheet_output, rows)
         args.json_output.parent.mkdir(parents=True, exist_ok=True)
         args.json_output.write_text(
@@ -249,6 +272,7 @@ def main() -> int:
                     "period_start": period_start,
                     "period_end": period_end,
                     "statement_balance": statement_balance,
+                    "minimum_payment_due": minimum_payment_due,
                     "payment_due_date": payment_due_date,
                     "transactions": rows,
                 }
