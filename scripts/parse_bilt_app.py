@@ -48,7 +48,7 @@ STATEMENT_BALANCE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 MINIMUM_PAYMENT_DUE_PATTERN = re.compile(
-    r"\bminimum\s+payment\s+due\b"
+    r"\bminimum\s+(?:payment(?:\s+due)?|amount\s+due)\b"
     r"\s*:?\s*\$?\s*((?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2})",
     re.IGNORECASE,
 )

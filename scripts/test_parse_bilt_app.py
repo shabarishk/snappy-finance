@@ -107,6 +107,13 @@ class BiltStatementParserTests(unittest.TestCase):
             ),
             (1234.56, 25.0, "2026-11-21"),
         )
+        self.assertEqual(
+            parse_bilt_app.extract_statement_balance(
+                "Statement Balance $1,234.56\nMinimum Payment: $25.00 "
+                "Due Date: 11/21/2026"
+            ),
+            (1234.56, 25.0, "2026-11-21"),
+        )
 
     def test_extracts_standardized_transactions_and_spreadsheet(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -129,13 +136,14 @@ class BiltStatementParserTests(unittest.TestCase):
             page.insert_text((510, 210), "$30.00")
             summary_page = document.new_page(width=612, height=792)
             summary_page.insert_text((20, 60), "New Balance: $1,234.56")
-            summary_page.insert_text((20, 90), "Payment Due Date: November 21, 2026")
+            summary_page.insert_text((20, 90), "Minimum Payment Due: $25.00")
+            summary_page.insert_text((20, 120), "Payment Due Date: November 21, 2026")
             document.save(pdf_path)
             document.close()
 
             start, end, balance, minimum_due, due_date, rows = parse_bilt_app.extract_rows(pdf_path)
             self.assertEqual((start, end), ("2026-10-01", "2026-10-31"))
-            self.assertEqual((balance, minimum_due, due_date), (1234.56, None, "2026-11-21"))
+            self.assertEqual((balance, minimum_due, due_date), (1234.56, 25.0, "2026-11-21"))
             self.assertEqual(
                 rows,
                 [
