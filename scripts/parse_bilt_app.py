@@ -44,6 +44,7 @@ SHORT_PERIOD_PATTERN = re.compile(
 )
 STATEMENT_BALANCE_PATTERN = re.compile(
     r"\b(?:new\s+balance|statement\s+balance|total\s+balance)\b"
+    rf"(?:\s+as\s+of\s+{DATE_TEXT})?"
     r"\s*:?\s*\$?\s*((?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2})",
     re.IGNORECASE,
 )
@@ -54,7 +55,7 @@ MINIMUM_PAYMENT_DUE_PATTERN = re.compile(
 )
 PAYMENT_DUE_DATE_PATTERN = re.compile(
     rf"\b(?:payment\s+due\s+date|payment\s+due|due\s+date)\b"
-    rf"\s*:?\s*(?:is\s+)?({DATE_TEXT})",
+    rf"\s*:?\s*(?:(?:is|by)\s+)?({DATE_TEXT})",
     re.IGNORECASE,
 )
 
