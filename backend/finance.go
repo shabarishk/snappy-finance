@@ -60,7 +60,10 @@ func (a *app) getDashboardMetrics(w http.ResponseWriter, r *http.Request) {
 				statement.account_id, statement.payment_due_date AS due_date,
 				statement.statement_balance, 'statement'::text AS source
 			FROM imported_statements statement
-			JOIN accounts account ON account.account_id=statement.account_id AND account.type='credit'
+			JOIN accounts account
+			  ON account.account_id=statement.account_id
+			 AND account.type='credit'
+			 AND account.excluded_from_calculations=FALSE
 			WHERE statement.review_status='approved'
 			  AND statement.statement_balance IS NOT NULL
 			  AND statement.payment_due_date IS NOT NULL
@@ -69,8 +72,10 @@ func (a *app) getDashboardMetrics(w http.ResponseWriter, r *http.Request) {
 			         statement.statement_id DESC
 		),
 		all_statement_balances AS (
-			SELECT account_id, due_date, statement_balance, source
-			FROM credit_card_statements
+			SELECT statement.account_id, statement.due_date, statement.statement_balance, statement.source
+			FROM credit_card_statements statement
+			JOIN accounts account ON account.account_id=statement.account_id
+			WHERE account.excluded_from_calculations=FALSE
 			UNION ALL
 			SELECT account_id, due_date, statement_balance, source
 			FROM approved_statement_balances
@@ -87,25 +92,42 @@ func (a *app) getDashboardMetrics(w http.ResponseWriter, r *http.Request) {
 			 FROM finance_settings settings
 			 LEFT JOIN accounts account
 			   ON account.account_id = settings.expendable_cash_account_id
+			  AND account.excluded_from_calculations=FALSE
 			 WHERE settings.setting_id = 1),
-			COALESCE((SELECT SUM(current_balance) FROM accounts WHERE type = 'credit'), 0),
-			CASE WHEN EXISTS (SELECT 1 FROM credit_card_statements) THEN
+			COALESCE((SELECT SUM(current_balance) FROM accounts WHERE type = 'credit' AND excluded_from_calculations=FALSE), 0),
+			CASE WHEN EXISTS (
+				SELECT 1
+				FROM credit_card_statements statement
+				JOIN accounts account ON account.account_id=statement.account_id
+				WHERE account.excluded_from_calculations=FALSE
+			) THEN
 				COALESCE((
 					SELECT SUM(statement_balance) FROM selected_statement_balances
 				), 0)
 			WHEN EXISTS (
 				SELECT 1
 				FROM imported_statements statement
-				JOIN accounts account ON account.account_id=statement.account_id AND account.type='credit'
+				JOIN accounts account
+				  ON account.account_id=statement.account_id
+				 AND account.type='credit'
+				 AND account.excluded_from_calculations=FALSE
 				WHERE statement.review_status='approved'
 				  AND statement.statement_balance IS NOT NULL
 				  AND statement.payment_due_date IS NOT NULL
 			) THEN COALESCE((SELECT SUM(statement_balance) FROM selected_statement_balances), 0)
 			ELSE NULL END,
-			EXISTS (SELECT 1 FROM credit_card_statements) OR EXISTS (
+			EXISTS (
+				SELECT 1
+				FROM credit_card_statements statement
+				JOIN accounts account ON account.account_id=statement.account_id
+				WHERE account.excluded_from_calculations=FALSE
+			) OR EXISTS (
 				SELECT 1
 				FROM imported_statements statement
-				JOIN accounts account ON account.account_id=statement.account_id AND account.type='credit'
+				JOIN accounts account
+				  ON account.account_id=statement.account_id
+				 AND account.type='credit'
+				 AND account.excluded_from_calculations=FALSE
 				WHERE statement.review_status='approved'
 				  AND statement.statement_balance IS NOT NULL
 				  AND statement.payment_due_date IS NOT NULL
@@ -316,7 +338,7 @@ func (a *app) setExpendableCashAccount(w http.ResponseWriter, r *http.Request) {
 		} else {
 			var exists bool
 			if err := a.db.QueryRow(r.Context(),
-				"SELECT EXISTS (SELECT 1 FROM accounts WHERE account_id = $1 AND type = 'depository')",
+				"SELECT EXISTS (SELECT 1 FROM accounts WHERE account_id = $1 AND type = 'depository' AND excluded_from_calculations=FALSE)",
 				accountID).Scan(&exists); err != nil {
 				log.Printf("validate expendable cash account: %v", err)
 				writeError(w, http.StatusInternalServerError, "could not validate cash account")

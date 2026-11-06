@@ -114,6 +114,7 @@ func main() {
 	mux.Handle("POST /api/plaid/accounts/{accountID}/sync", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.syncAccount))))
 	mux.Handle("DELETE /api/plaid/accounts/{accountID}", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.unlinkAccount))))
 	mux.Handle("GET /api/accounts", a.requireAuth(http.HandlerFunc(a.listAccounts)))
+	mux.Handle("PATCH /api/admin/accounts/{accountID}/calculations", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.setAccountExcludedFromCalculations))))
 	mux.Handle("GET /api/statement-parsers", a.requireAuth(http.HandlerFunc(a.listStatementParsers)))
 	mux.Handle("PUT /api/admin/accounts/{accountID}/statement-parser", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.setAccountStatementParser))))
 	mux.Handle("POST /api/admin/accounts/{accountID}/statements", a.requireAuth(a.requireAdmin(http.HandlerFunc(a.uploadAccountStatement))))
@@ -440,7 +441,7 @@ func (a *app) listAccounts(w http.ResponseWriter, r *http.Request) {
 		SELECT accounts.account_id, accounts.name, accounts.official_name, accounts.mask, accounts.type,
 		       accounts.subtype, accounts.current_balance, accounts.iso_currency_code, plaid_items.demo_data,
 		       cycle.statement_close_day, cycle.statement_due_day, accounts.item_id, plaid_items.last_synced_at,
-		       accounts.statement_parser_id
+		       accounts.statement_parser_id, accounts.excluded_from_calculations
 		FROM accounts
 		JOIN plaid_items USING (item_id)
 		LEFT JOIN credit_card_cycles cycle USING (account_id)
@@ -454,7 +455,7 @@ func (a *app) listAccounts(w http.ResponseWriter, r *http.Request) {
 	accounts := make([]account, 0)
 	for rows.Next() {
 		var item account
-		if err := rows.Scan(&item.AccountID, &item.Name, &item.OfficialName, &item.Mask, &item.Type, &item.Subtype, &item.CurrentBalance, &item.Currency, &item.DemoData, &item.StatementCloseDay, &item.StatementDueDay, &item.ItemID, &item.LastSyncedAt, &item.StatementParserID); err != nil {
+		if err := rows.Scan(&item.AccountID, &item.Name, &item.OfficialName, &item.Mask, &item.Type, &item.Subtype, &item.CurrentBalance, &item.Currency, &item.DemoData, &item.StatementCloseDay, &item.StatementDueDay, &item.ItemID, &item.LastSyncedAt, &item.StatementParserID, &item.ExcludedFromCalculations); err != nil {
 			log.Printf("scan account row: %v", err)
 			writeError(w, http.StatusInternalServerError, "could not load accounts")
 			return
@@ -467,6 +468,54 @@ func (a *app) listAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, accounts)
+}
+
+func (a *app) setAccountExcludedFromCalculations(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Excluded *bool `json:"excluded_from_calculations"`
+	}
+	if err := decodeJSON(r, &input); err != nil || input.Excluded == nil {
+		writeError(w, http.StatusBadRequest, "excluded_from_calculations is required")
+		return
+	}
+	tx, err := a.db.Begin(r.Context())
+	if err != nil {
+		log.Printf("begin account calculation exclusion update: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not update account calculation setting")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	tag, err := tx.Exec(r.Context(), `
+		UPDATE accounts
+		SET excluded_from_calculations=$1, updated_at=NOW()
+		WHERE account_id=$2`,
+		*input.Excluded, r.PathValue("accountID"))
+	if err != nil {
+		log.Printf("update account calculation exclusion: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not update account calculation setting")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "account not found")
+		return
+	}
+	if *input.Excluded {
+		if _, err := tx.Exec(r.Context(), `
+			UPDATE finance_settings
+			SET expendable_cash_account_id=NULL, updated_at=NOW()
+			WHERE setting_id=1 AND expendable_cash_account_id=$1`,
+			r.PathValue("accountID")); err != nil {
+			log.Printf("clear excluded expendable cash account: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not update account calculation setting")
+			return
+		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		log.Printf("commit account calculation exclusion: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not update account calculation setting")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"excluded_from_calculations": *input.Excluded})
 }
 
 func (a *app) listTransactions(w http.ResponseWriter, r *http.Request) {
@@ -1207,20 +1256,21 @@ func (a *app) runSyncWorker(ctx context.Context) {
 }
 
 type account struct {
-	AccountID         string     `json:"account_id"`
-	ItemID            string     `json:"item_id"`
-	Name              string     `json:"name"`
-	OfficialName      *string    `json:"official_name"`
-	Mask              *string    `json:"mask"`
-	Type              string     `json:"type"`
-	Subtype           string     `json:"subtype"`
-	CurrentBalance    *float64   `json:"current_balance"`
-	Currency          *string    `json:"iso_currency_code"`
-	DemoData          bool       `json:"demo_data"`
-	StatementCloseDay *int16     `json:"statement_close_day"`
-	StatementDueDay   *int16     `json:"statement_due_day"`
-	LastSyncedAt      *time.Time `json:"last_synced_at"`
-	StatementParserID *string    `json:"statement_parser_id"`
+	AccountID                string     `json:"account_id"`
+	ItemID                   string     `json:"item_id"`
+	Name                     string     `json:"name"`
+	OfficialName             *string    `json:"official_name"`
+	Mask                     *string    `json:"mask"`
+	Type                     string     `json:"type"`
+	Subtype                  string     `json:"subtype"`
+	CurrentBalance           *float64   `json:"current_balance"`
+	Currency                 *string    `json:"iso_currency_code"`
+	DemoData                 bool       `json:"demo_data"`
+	StatementCloseDay        *int16     `json:"statement_close_day"`
+	StatementDueDay          *int16     `json:"statement_due_day"`
+	LastSyncedAt             *time.Time `json:"last_synced_at"`
+	StatementParserID        *string    `json:"statement_parser_id"`
+	ExcludedFromCalculations bool       `json:"excluded_from_calculations"`
 }
 
 type transaction struct {

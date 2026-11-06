@@ -124,6 +124,10 @@ func (a *app) refreshOpenIncomeProjections(ctx context.Context) (projectionSetti
 	if err != nil {
 		return settings, nil, nil, err
 	}
+	calculationExpenses, err := a.scheduledExpensesForCalculations(ctx, expenses)
+	if err != nil {
+		return settings, nil, nil, err
+	}
 	spendMonthStartDay, err := a.getSpendMonthStartDay(ctx)
 	if err != nil {
 		return settings, nil, nil, err
@@ -133,11 +137,44 @@ func (a *app) refreshOpenIncomeProjections(ctx context.Context) (projectionSetti
 		return settings, nil, nil, err
 	}
 	today = dateOnly(today)
-	periods := calculateIncomeProjectionsOn(settings, expenses, today, spendMonthStartDay)
+	periods := calculateIncomeProjectionsOn(settings, calculationExpenses, today, spendMonthStartDay)
 	if err := a.persistOpenProjections(ctx, today, periods); err != nil {
 		return settings, nil, nil, err
 	}
 	return settings, expenses, periods, nil
+}
+
+func (a *app) scheduledExpensesForCalculations(ctx context.Context, expenses []scheduledExpense) ([]scheduledExpense, error) {
+	rows, err := a.db.Query(ctx, `
+		SELECT account_id
+		FROM accounts
+		WHERE excluded_from_calculations=TRUE`)
+	if err != nil {
+		return nil, err
+	}
+	excludedAccountIDs := make(map[string]bool)
+	for rows.Next() {
+		var accountID string
+		if err := rows.Scan(&accountID); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		excludedAccountIDs[accountID] = true
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	filtered := make([]scheduledExpense, 0, len(expenses))
+	for _, expense := range expenses {
+		if expense.AccountID != nil && excludedAccountIDs[*expense.AccountID] {
+			continue
+		}
+		filtered = append(filtered, expense)
+	}
+	return filtered, nil
 }
 
 func calculateIncomeProjections(settings projectionSettings, expenses []scheduledExpense, today time.Time) []incomeProjectionPeriod {

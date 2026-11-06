@@ -86,19 +86,24 @@ func (a *app) getSubscriptionTracker(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		accountName, accountType := "", ""
+		accountExcluded := false
 		var closeDay, dueDay *int16
 		if expense.AccountID != nil {
 			if err := a.db.QueryRow(r.Context(),
 				`SELECT COALESCE(account.official_name, account.name), account.type,
-					cycle.statement_close_day, cycle.statement_due_day
+					cycle.statement_close_day, cycle.statement_due_day,
+					account.excluded_from_calculations
 				FROM accounts account
 				LEFT JOIN credit_card_cycles cycle USING (account_id)
 				WHERE account.account_id = $1`, *expense.AccountID,
-			).Scan(&accountName, &accountType, &closeDay, &dueDay); err != nil {
+			).Scan(&accountName, &accountType, &closeDay, &dueDay, &accountExcluded); err != nil {
 				log.Printf("load scheduled expense account: %v", err)
 				writeError(w, http.StatusInternalServerError, "could not load subscription tracker")
 				return
 			}
+		}
+		if accountExcluded {
+			continue
 		}
 		usedTransactions := make(map[string]bool)
 		for _, due := range scheduledExpenseDueDates(expense.Frequency, dueDate, occurrenceStart, periodEnd) {
@@ -150,6 +155,7 @@ func (a *app) getSubscriptionTracker(w http.ResponseWriter, r *http.Request) {
 				FROM application_transactions txn
 				LEFT JOIN accounts account USING (account_id)
 				WHERE txn.pending = FALSE
+				  AND NOT COALESCE(account.excluded_from_calculations, FALSE)
 				  AND (
 					  EXISTS (
 						  SELECT 1
@@ -293,6 +299,7 @@ func (a *app) getSubscriptionTracker(w http.ResponseWriter, r *http.Request) {
 		JOIN scheduled_projection_expenses expense ON expense.expense_id = history.expense_id
 		JOIN application_transactions txn ON txn.transaction_id = history.transaction_id
 		LEFT JOIN accounts account ON account.account_id = txn.account_id
+		WHERE NOT COALESCE(account.excluded_from_calculations, FALSE)
 		ORDER BY history.payment_date DESC, history.history_id DESC
 		LIMIT 12`)
 	if err != nil {
@@ -322,6 +329,11 @@ func (a *app) getSubscriptionTracker(w http.ResponseWriter, r *http.Request) {
 		SELECT expense.name, history.amount, history.effective_date::text, history.change_type
 		FROM subscription_amount_history history
 		JOIN scheduled_projection_expenses expense ON expense.expense_id = history.expense_id
+		WHERE expense.account_id IS NULL OR NOT EXISTS (
+			SELECT 1 FROM accounts account
+			WHERE account.account_id=expense.account_id
+			  AND account.excluded_from_calculations=TRUE
+		)
 		ORDER BY history.effective_date DESC, history.history_id DESC
 		LIMIT 12`)
 	if err != nil {
@@ -375,14 +387,22 @@ func (a *app) resolveSubscriptionIncrease(w http.ResponseWriter, r *http.Request
 	var expenseID int64
 	var transactionID string
 	var previousAmount, observedAmount float64
+	var accountExcluded bool
 	err = tx.QueryRow(r.Context(), `
-		SELECT expense_id, transaction_id, previous_amount, observed_amount
-		FROM subscription_increase_reviews
-		WHERE review_id = $1 AND status = 'pending'
-		FOR UPDATE`, reviewID).Scan(&expenseID, &transactionID, &previousAmount, &observedAmount)
+		SELECT review.expense_id, review.transaction_id, review.previous_amount, review.observed_amount,
+			COALESCE(account.excluded_from_calculations, FALSE)
+		FROM subscription_increase_reviews review
+		JOIN scheduled_projection_expenses expense ON expense.expense_id=review.expense_id
+		LEFT JOIN accounts account ON account.account_id=expense.account_id
+		WHERE review.review_id = $1 AND review.status = 'pending'
+		FOR UPDATE OF review`, reviewID).Scan(&expenseID, &transactionID, &previousAmount, &observedAmount, &accountExcluded)
 	if err != nil {
 		log.Printf("load pending subscription increase: %v", err)
 		writeError(w, http.StatusNotFound, "pending subscription increase not found")
+		return
+	}
+	if accountExcluded {
+		writeError(w, http.StatusConflict, "the payment account is excluded from financial calculations")
 		return
 	}
 	status := "dismissed"

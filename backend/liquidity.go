@@ -82,6 +82,7 @@ func (a *app) getDashboardLiquidityTransactions(w http.ResponseWriter, r *http.R
 		LEFT JOIN transaction_categories category ON category.category_id = txn.category_id
 		WHERE txn.amount > 0
 		  AND account.type IN ('depository', 'credit')
+		  AND account.excluded_from_calculations=FALSE
 		  AND ($1 OR NOT txn.hidden_from_users)
 		  AND NOT COALESCE(txn.category_id = ANY($2::text[]), FALSE)
 		  AND NOT COALESCE(txn.transaction_id = ANY($3::text[]), FALSE)
@@ -184,6 +185,7 @@ func (a *app) getDashboardLiquidity(w http.ResponseWriter, r *http.Request) {
 		FROM accounts account
 		LEFT JOIN credit_card_cycles cycle USING (account_id)
 		WHERE account.type = 'credit'
+		  AND account.excluded_from_calculations=FALSE
 		  AND (cycle.account_id IS NULL OR cycle.statement_close_day IS NULL OR cycle.statement_due_day IS NULL)
 		ORDER BY account.name`)
 	if err != nil {
@@ -233,6 +235,7 @@ func (a *app) getDashboardLiquidity(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN transaction_categories category ON category.category_id = txn.category_id
 		WHERE txn.amount > 0
 		  AND account.type IN ('depository', 'credit')
+		  AND account.excluded_from_calculations=FALSE
 		  AND ($1 OR NOT txn.hidden_from_users)
 		  AND NOT COALESCE(txn.category_id = ANY($2::text[]), FALSE)
 		  AND NOT COALESCE(txn.transaction_id = ANY($3::text[]), FALSE)

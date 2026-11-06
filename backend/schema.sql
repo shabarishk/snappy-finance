@@ -38,8 +38,12 @@ CREATE TABLE IF NOT EXISTS accounts (
     subtype TEXT NOT NULL DEFAULT '',
     current_balance NUMERIC(18, 4),
     iso_currency_code TEXT,
+    excluded_from_calculations BOOLEAN NOT NULL DEFAULT FALSE,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE accounts
+    ADD COLUMN IF NOT EXISTS excluded_from_calculations BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE TABLE IF NOT EXISTS statement_parsers (
     parser_id TEXT PRIMARY KEY,

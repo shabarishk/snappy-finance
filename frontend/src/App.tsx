@@ -174,6 +174,7 @@ type Account = {
   statement_due_day: number | null;
   last_synced_at: string | null;
   statement_parser_id: string | null;
+  excluded_from_calculations: boolean;
 };
 
 const accountCategories = [
@@ -572,6 +573,7 @@ export default function App() {
   const [uploadingStatement, setUploadingStatement] = useState(false);
   const [reviewingStatementID, setReviewingStatementID] = useState<string | null>(null);
   const [savingStatementParserAccountID, setSavingStatementParserAccountID] = useState<string | null>(null);
+  const [updatingAccountCalculationID, setUpdatingAccountCalculationID] = useState<string | null>(null);
   const [transactionCategories, setTransactionCategories] = useState<TransactionCategory[]>([]);
   const [pendingCategoryChange, setPendingCategoryChange] = useState<{ item: Transaction; categoryID: string } | null>(null);
   const [liquidityTransactionsDialog, setLiquidityTransactionsDialog] = useState<LiquidityTransactionsDialog | null>(null);
@@ -922,11 +924,16 @@ export default function App() {
     1,
   );
   const displayedMonthName = displayedMonth.toLocaleDateString(undefined, { month: "long" });
+  const excludedAccountIDs = useMemo(
+    () => new Set(accounts.filter((account) => account.excluded_from_calculations).map((account) => account.account_id)),
+    [accounts],
+  );
 
   const totals = useMemo(() => {
     const categoriesByID = new Map(transactionCategories.map((category) => [category.category_id, category]));
     const current = transactions.filter(
       (item) => {
+        if (excludedAccountIDs.has(item.account_id)) return false;
         if (item.date < statisticsRange.start || item.date > statisticsRange.end) return false;
         const category = item.category_id ? categoriesByID.get(item.category_id) : undefined;
         const transactionType = item.amount < 0 ? "income" : "expense";
@@ -939,7 +946,7 @@ export default function App() {
       .filter((item) => item.amount < 0 && item.category_id === "expendable_income")
       .reduce((sum, item) => sum + Math.abs(item.amount), 0);
     return { spent, income, expendableIncome, net: income - spent };
-  }, [transactions, transactionCategories, statisticsRange]);
+  }, [excludedAccountIDs, transactions, transactionCategories, statisticsRange]);
 
   const accountConnections = useMemo(() => {
     const accountsByConnection = new Map<string, Account[]>();
@@ -967,7 +974,7 @@ export default function App() {
     });
   }, [accounts]);
   const cashAccounts = useMemo(
-    () => accounts.filter((account) => account.type.toLowerCase() === "depository"),
+    () => accounts.filter((account) => account.type.toLowerCase() === "depository" && !account.excluded_from_calculations),
     [accounts],
   );
   const totalCashBalance = cashAccounts.reduce((sum, account) => sum + (account.current_balance ?? 0), 0);
@@ -1056,6 +1063,7 @@ export default function App() {
   const transactionTotals = useMemo(() => {
     const totalsByCurrency = new Map<string, { moneyIn: number; moneyOut: number }>();
     visibleTransactions.forEach((item) => {
+      if (excludedAccountIDs.has(item.account_id)) return;
       const currency = item.iso_currency_code || "USD";
       const totals = totalsByCurrency.get(currency) ?? { moneyIn: 0, moneyOut: 0 };
       if (item.amount < 0) {
@@ -1066,7 +1074,7 @@ export default function App() {
       totalsByCurrency.set(currency, totals);
     });
     return Array.from(totalsByCurrency, ([currency, totals]) => ({ currency, ...totals }));
-  }, [visibleTransactions]);
+  }, [excludedAccountIDs, visibleTransactions]);
   const transactionPageCount = Math.max(1, Math.ceil(visibleTransactions.length / transactionPageSize));
   const currentTransactionPage = Math.min(transactionPage, transactionPageCount);
   const pageTransactions = useMemo(() => {
@@ -2269,6 +2277,41 @@ export default function App() {
     }
   }
 
+  async function setAccountCalculationExclusion(account: Account, excluded: boolean) {
+    setUpdatingAccountCalculationID(account.account_id);
+    setError("");
+    setNotice("");
+    try {
+      const result = await api<{ excluded_from_calculations: boolean }>(
+        `/api/admin/accounts/${encodeURIComponent(account.account_id)}/calculations`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ excluded_from_calculations: excluded }),
+        },
+      );
+      setAccounts((current) => current.map((item) =>
+        item.account_id === account.account_id
+          ? { ...item, excluded_from_calculations: result.excluded_from_calculations }
+          : item,
+      ));
+      if (result.excluded_from_calculations) {
+        setExpendableAccountSelection((current) => current === account.account_id ? "" : current);
+        setFinanceSettings((current) => current?.expendable_cash_account_id === account.account_id
+          ? { ...current, expendable_cash_account_id: null }
+          : current);
+      }
+      setMetricsRefreshKey((current) => current + 1);
+      setProjectionRefreshKey((current) => current + 1);
+      setNotice(result.excluded_from_calculations
+        ? `${account.official_name || account.name} is excluded from financial calculations. Its transaction history remains available.`
+        : `${account.official_name || account.name} is included in financial calculations again.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not update account calculation setting");
+    } finally {
+      setUpdatingAccountCalculationID(null);
+    }
+  }
+
   async function unlinkAccountConnection(connection: (typeof accountConnections)[number]) {
     const accountNames = connection.accounts.map((account) => account.official_name || account.name).join(", ");
     const confirmed = window.confirm(
@@ -2535,7 +2578,7 @@ export default function App() {
                               <option value="">Select an account</option>
                               {accounts.map((account) => (
                                 <option key={account.account_id} value={account.account_id}>
-                                  {account.official_name || account.name}{account.mask ? ` ···· ${account.mask}` : ""}
+                                  {account.official_name || account.name}{account.mask ? ` ···· ${account.mask}` : ""}{account.excluded_from_calculations ? " · Excluded from calculations" : ""}
                                 </option>
                               ))}
                             </select>
@@ -2711,7 +2754,7 @@ export default function App() {
   const accountsPanel = (
     <section className="panel settings-panel accounts-panel">
       <div className="panel-heading">
-        <div><h2>Connected accounts</h2><p>Balances and transaction access from your linked Plaid connections.</p></div>
+        <div><h2>Connected accounts</h2><p>Exclude an account from household calculations without removing its transactions or Plaid connection.</p></div>
       </div>
       {loading ? <div className="empty-state">Loading accounts…</div> : accountConnections.length === 0 ? (
         <div className="empty-state">
@@ -2763,7 +2806,7 @@ export default function App() {
                         <div className="account-statement-row" key={account.account_id}>
                           <div className="account-row">
                             <span className="account-icon"><Landmark size={18} /></span>
-                            <div className="account-info"><strong>{account.official_name || account.name}</strong><span>{account.type}{account.subtype ? ` · ${account.subtype}` : ""}{account.mask ? ` ···· ${account.mask}` : ""}{account.demo_data ? " · DEMO" : ""}</span></div>
+                            <div className="account-info"><strong>{account.official_name || account.name}</strong><span>{account.type}{account.subtype ? ` · ${account.subtype}` : ""}{account.mask ? ` ···· ${account.mask}` : ""}{account.demo_data ? " · DEMO" : ""}{account.excluded_from_calculations ? " · Excluded from calculations" : ""}</span></div>
                             <strong className="account-balance">{money(account.current_balance, account.iso_currency_code)}</strong>
                             {profile?.role === "admin" && !account.demo_data && (
                               <div className="account-actions">
@@ -2776,6 +2819,18 @@ export default function App() {
                               </div>
                             )}
                           </div>
+                          {profile?.role === "admin" && (
+                            <label className="account-calculation-control">
+                              <input
+                                type="checkbox"
+                                checked={!account.excluded_from_calculations}
+                                disabled={updatingAccountCalculationID === account.account_id}
+                                onChange={(event) => void setAccountCalculationExclusion(account, !event.target.checked)}
+                                aria-label={`Include ${account.official_name || account.name} in financial calculations`}
+                              />
+                              <span>Include in financial calculations</span>
+                            </label>
+                          )}
                           {profile?.role === "admin" && !account.demo_data && (
                             <label className="account-parser-control">
                               <span>Statement parser</span>
@@ -3554,7 +3609,7 @@ export default function App() {
           {!hiddenCards.includes("credit_balance") && <article className="summary-card" style={{ order: cardOrder.indexOf("credit_balance") }}>
             <div className="summary-label">CURRENT TOTAL CREDIT BALANCE</div>
             <div className="summary-value">{money(dashboardMetrics.current_total_credit_balance)}</div>
-            <div className="summary-foot">Across {accounts.filter((account) => account.type.toLowerCase() === "credit").length} credit account{accounts.filter((account) => account.type.toLowerCase() === "credit").length === 1 ? "" : "s"}</div>
+            <div className="summary-foot">Across {accounts.filter((account) => account.type.toLowerCase() === "credit" && !account.excluded_from_calculations).length} credit account{accounts.filter((account) => account.type.toLowerCase() === "credit" && !account.excluded_from_calculations).length === 1 ? "" : "s"}</div>
           </article>}
           {!hiddenCards.includes("statement_balance") && <article className="summary-card" style={{ order: cardOrder.indexOf("statement_balance") }}>
             <div className="summary-label">TOTAL STATEMENT BALANCE DUE</div>
