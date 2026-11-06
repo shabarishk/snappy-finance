@@ -22,8 +22,9 @@ COPY --from=build /out/snappy-finance ./snappy-finance
 COPY backend/schema.sql ./schema.sql
 COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
-COPY scripts/parse_bilt.py scripts/parse_bilt_app.py ./scripts/
+COPY scripts/parse_bilt.py scripts/parse_bilt_app.py scripts/parse_chase.py ./scripts/
 ENV STATEMENT_PARSER_SCRIPT=/app/scripts/parse_bilt_app.py
+ENV CHASE_STATEMENT_PARSER_SCRIPT=/app/scripts/parse_chase.py
 ENV PYTHONDONTWRITEBYTECODE=1
 USER 65532:65532
 EXPOSE 8080

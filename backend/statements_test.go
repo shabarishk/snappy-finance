@@ -89,3 +89,22 @@ func TestValidateStatementReviewDecision(t *testing.T) {
 		}
 	}
 }
+
+func TestStatementParserScriptForBundledParsers(t *testing.T) {
+	cfg := config{
+		statementParserScript: "scripts/parse_bilt_app.py",
+		chaseParserScript:     "scripts/parse_chase.py",
+	}
+	for parserID, want := range map[string]string{
+		"bilt":  cfg.statementParserScript,
+		"chase": cfg.chaseParserScript,
+	} {
+		got, ok := statementParserScriptFor(parserID, cfg)
+		if !ok || got != want {
+			t.Errorf("statementParserScriptFor(%q) = (%q, %t), want (%q, true)", parserID, got, ok, want)
+		}
+	}
+	if _, ok := statementParserScriptFor("unknown", cfg); ok {
+		t.Fatal("unknown statement parser should not have a script")
+	}
+}

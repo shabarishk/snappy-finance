@@ -52,7 +52,9 @@ CREATE TABLE IF NOT EXISTS statement_parsers (
 );
 
 INSERT INTO statement_parsers (parser_id, display_name)
-VALUES ('bilt', 'Bilt card statement')
+VALUES
+    ('bilt', 'Bilt card statement'),
+    ('chase', 'Chase credit card statement')
 ON CONFLICT (parser_id) DO UPDATE SET display_name = EXCLUDED.display_name, enabled = TRUE;
 
 ALTER TABLE accounts

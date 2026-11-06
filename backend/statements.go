@@ -34,6 +34,7 @@ type statementParser struct {
 
 var bundledStatementParsers = []statementParser{
 	{ParserID: "bilt", DisplayName: "Bilt card statement"},
+	{ParserID: "chase", DisplayName: "Chase credit card statement"},
 }
 
 type parsedStatement struct {
@@ -202,7 +203,8 @@ func (a *app) uploadAccountStatement(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "select a statement parser for this account before uploading")
 		return
 	}
-	if !isBundledStatementParser(*parserID) {
+	parserScript, ok := statementParserScriptFor(*parserID, a.cfg)
+	if !ok {
 		writeError(w, http.StatusConflict, "the selected statement parser is not available in this app version")
 		return
 	}
@@ -271,7 +273,7 @@ func (a *app) uploadAccountStatement(w http.ResponseWriter, r *http.Request) {
 	jsonPath := filepath.Join(temporaryDirectory, "statement.json")
 	spreadsheetPath := filepath.Join(temporaryDirectory, "statement.xlsx")
 	commandArgs := []string{
-		a.cfg.statementParserScript,
+		parserScript,
 		"--input", pdfPath,
 		"--json-output", jsonPath,
 		"--spreadsheet-output", spreadsheetPath,
@@ -1150,4 +1152,18 @@ func isBundledStatementParser(parserID string) bool {
 		}
 	}
 	return false
+}
+
+func statementParserScriptFor(parserID string, cfg config) (string, bool) {
+	if !isBundledStatementParser(parserID) {
+		return "", false
+	}
+	switch parserID {
+	case "bilt":
+		return cfg.statementParserScript, true
+	case "chase":
+		return cfg.chaseParserScript, true
+	default:
+		return "", false
+	}
 }
