@@ -2212,7 +2212,7 @@ export default function App() {
               </table>
             </div>
             <h3>Reconciliation with Plaid</h3>
-            <p className="statement-match-guidance">Unmatched statement rows can be paired with any unmatched Plaid transaction from this statement. Manually selected matches may have different dates or amounts, so verify the pair before matching.</p>
+            <p className="statement-match-guidance">Unmatched rows can be paired with available Plaid transactions. Existing matches are retained, and can be changed when another candidate is available. Manually selected matches may have different dates or amounts, so verify the pair before matching.</p>
             <div className="statement-detail-list">
               {selectedStatementDetails.transactions.map((transaction) => (
                 <div className={`statement-detail-row ${transaction.match_status !== "matched" ? "statement-detail-discrepancy" : ""}`} key={transaction.statement_transaction_id}>
@@ -2221,10 +2221,10 @@ export default function App() {
                     <span>{displayDate(transaction.date)} · {transaction.match_status === "matched"
                       ? `Matched to ${transaction.matched_plaid_merchant || "Plaid transaction"} on ${transaction.matched_plaid_date ? displayDate(transaction.matched_plaid_date) : "unknown date"}${transaction.matched_plaid_amount !== null ? ` · Plaid amount ${money(Math.abs(transaction.matched_plaid_amount))}` : ""}`
                       : transaction.match_status === "ambiguous" ? "Multiple possible Plaid matches" : "No matching Plaid transaction"}</span>
-                    {profile?.role === "admin" && selectedStatement.review_status === "pending_review" && transaction.match_status !== "matched" && transaction.candidates.length > 0 && (
+                    {profile?.role === "admin" && selectedStatement.review_status === "pending_review" && transaction.candidates.length > 0 && (
                       <div className="statement-manual-match">
                         <label>
-                          Match to Plaid transaction
+                          {transaction.match_status === "matched" ? "Change match to" : "Match to Plaid transaction"}
                           <select
                             value={statementMatchSelections[transaction.statement_transaction_id] ?? ""}
                             onChange={(event) => setStatementMatchSelections((current) => ({
@@ -2245,7 +2245,9 @@ export default function App() {
                           className="secondary-button"
                           disabled={!statementMatchSelections[transaction.statement_transaction_id] || matchingStatementTransactionID !== null}
                           onClick={() => void matchStatementTransaction(selectedStatement.statement_id, transaction.statement_transaction_id)}
-                        >{matchingStatementTransactionID === transaction.statement_transaction_id ? "Matching…" : "Match"}</button>
+                        >{matchingStatementTransactionID === transaction.statement_transaction_id
+                          ? "Matching…"
+                          : transaction.match_status === "matched" ? "Change match" : "Match"}</button>
                       </div>
                     )}
                   </div>

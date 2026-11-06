@@ -64,6 +64,12 @@ type statementMatch struct {
 	Plaid  *plaidStatementTransaction
 }
 
+type existingStatementMatch struct {
+	RowNumber    int
+	StatementRow parsedStatementTransaction
+	Plaid        plaidStatementTransaction
+}
+
 type importedStatementSummary struct {
 	StatementID         string    `json:"statement_id"`
 	AccountID           string    `json:"account_id"`
@@ -381,7 +387,17 @@ func (a *app) uploadAccountStatement(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not reconcile statement transactions")
 		return
 	}
-	matches, ambiguousPlaidIDs := reconcileStatementRows(parsed.Transactions, candidates)
+	existingMatches, err := a.loadExistingStatementMatches(r.Context(), r.PathValue("accountID"), sourceHash)
+	if err != nil {
+		log.Printf("load existing statement transaction matches: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not preserve existing statement matches")
+		return
+	}
+	matches, ambiguousPlaidIDs := reconcileStatementRowsPreservingMatches(
+		parsed.Transactions,
+		candidates,
+		existingMatches,
+	)
 	matchedPlaidIDs := make(map[string]bool)
 	for _, match := range matches {
 		if match.Plaid != nil {
@@ -730,7 +746,7 @@ func (a *app) getImportedStatement(w http.ResponseWriter, r *http.Request) {
 		 AND NOT t.pending
 		WHERE sit.statement_id=$1
 		  AND s.review_status='pending_review'
-		  AND sit.match_status IN ('ambiguous', 'statement_only')
+		  AND sit.match_status IN ('ambiguous', 'statement_only', 'matched')
 		  AND NOT EXISTS (
 		      SELECT 1
 		      FROM statement_import_transactions used
@@ -827,15 +843,21 @@ func (a *app) matchImportedStatementTransaction(w http.ResponseWriter, r *http.R
 	}
 	defer tx.Rollback(r.Context())
 
-	var accountID, reviewStatus, matchStatus string
+	var accountID, reviewStatus string
+	var previousPlaidID, previousPlaidDate, previousPlaidMerchant string
+	var previousPlaidAmount float64
 	err = tx.QueryRow(r.Context(), `
-		SELECT s.account_id, s.review_status, sit.match_status
+		SELECT s.account_id, s.review_status,
+		       COALESCE(sit.matched_plaid_transaction_id, ''),
+		       COALESCE(sit.matched_plaid_date::text, ''),
+		       COALESCE(sit.matched_plaid_merchant, ''),
+		       COALESCE(sit.matched_plaid_amount, 0)
 		FROM statement_import_transactions sit
 		JOIN imported_statements s ON s.statement_id=sit.statement_id
 		WHERE sit.statement_id=$1 AND sit.statement_transaction_id=$2
 		FOR UPDATE OF s, sit`,
 		r.PathValue("statementID"), statementTransactionID,
-	).Scan(&accountID, &reviewStatus, &matchStatus)
+	).Scan(&accountID, &reviewStatus, &previousPlaidID, &previousPlaidDate, &previousPlaidMerchant, &previousPlaidAmount)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "statement transaction not found")
 		return
@@ -849,11 +871,6 @@ func (a *app) matchImportedStatementTransaction(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusConflict, "only statements awaiting review can be matched")
 		return
 	}
-	if matchStatus == "matched" {
-		writeError(w, http.StatusConflict, "statement transaction is already matched")
-		return
-	}
-
 	var plaidDate, plaidMerchant string
 	var plaidAmount float64
 	err = tx.QueryRow(r.Context(), `
@@ -901,6 +918,23 @@ func (a *app) matchImportedStatementTransaction(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "could not save statement match")
 		return
 	}
+	newPlaidID := strings.TrimSpace(input.PlaidTransactionID)
+	if previousPlaidID != "" && previousPlaidID != newPlaidID {
+		if _, err := tx.Exec(r.Context(), `
+			INSERT INTO statement_reconciliation_issues (
+				statement_id, plaid_transaction_id, transaction_date, merchant, amount, issue_type
+			) VALUES ($1,$2,$3,$4,$5,'plaid_only')
+			ON CONFLICT (statement_id, plaid_transaction_id) DO UPDATE SET
+				transaction_date=EXCLUDED.transaction_date,
+				merchant=EXCLUDED.merchant,
+				amount=EXCLUDED.amount,
+				issue_type='plaid_only'`,
+			r.PathValue("statementID"), previousPlaidID, previousPlaidDate, previousPlaidMerchant, previousPlaidAmount); err != nil {
+			log.Printf("restore replaced Plaid transaction as a reconciliation issue: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not save statement match")
+			return
+		}
+	}
 	statementTransactionKey := "statement-import-" + strconv.FormatInt(statementTransactionID, 10)
 	if _, err := tx.Exec(r.Context(),
 		"DELETE FROM subscription_payment_history WHERE transaction_id=$1",
@@ -919,7 +953,7 @@ func (a *app) matchImportedStatementTransaction(w http.ResponseWriter, r *http.R
 	if _, err := tx.Exec(r.Context(), `
 		DELETE FROM statement_reconciliation_issues
 		WHERE statement_id=$1 AND plaid_transaction_id=$2`,
-		r.PathValue("statementID"), strings.TrimSpace(input.PlaidTransactionID)); err != nil {
+		r.PathValue("statementID"), newPlaidID); err != nil {
 		log.Printf("remove matched Plaid reconciliation issue: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not save statement match")
 		return
@@ -1042,6 +1076,41 @@ func (a *app) loadPlaidStatementTransactions(ctx context.Context, accountID, per
 	return transactions, rows.Err()
 }
 
+func (a *app) loadExistingStatementMatches(ctx context.Context, accountID, sourceHash string) ([]existingStatementMatch, error) {
+	rows, err := a.db.Query(ctx, `
+		SELECT sit.row_number, sit.transaction_date::text, sit.merchant, sit.amount,
+		       sit.matched_plaid_transaction_id, COALESCE(sit.matched_plaid_date::text, ''),
+		       COALESCE(sit.matched_plaid_merchant, ''), COALESCE(sit.matched_plaid_amount, 0)
+		FROM statement_import_transactions sit
+		JOIN imported_statements s ON s.statement_id=sit.statement_id
+		WHERE s.account_id=$1 AND s.source_sha256=$2
+		  AND sit.match_status='matched'
+		  AND sit.matched_plaid_transaction_id IS NOT NULL`,
+		accountID, sourceHash)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	matches := make([]existingStatementMatch, 0)
+	for rows.Next() {
+		var match existingStatementMatch
+		if err := rows.Scan(
+			&match.RowNumber,
+			&match.StatementRow.Date,
+			&match.StatementRow.Merchant,
+			&match.StatementRow.Amount,
+			&match.Plaid.TransactionID,
+			&match.Plaid.Date,
+			&match.Plaid.Merchant,
+			&match.Plaid.Amount,
+		); err != nil {
+			return nil, err
+		}
+		matches = append(matches, match)
+	}
+	return matches, rows.Err()
+}
+
 func reconcileStatementRows(rows []parsedStatementTransaction, plaidRows []plaidStatementTransaction) ([]statementMatch, map[string]bool) {
 	candidatesByStatement := make([][]int, len(rows))
 	for statementIndex, statementRow := range rows {
@@ -1113,6 +1182,51 @@ func reconcileStatementRows(rows []parsedStatementTransaction, plaidRows []plaid
 		} else {
 			matches[statementIndex].Status = "statement_only"
 		}
+	}
+	return matches, ambiguousPlaidIDs
+}
+
+func reconcileStatementRowsPreservingMatches(
+	rows []parsedStatementTransaction,
+	plaidRows []plaidStatementTransaction,
+	existingMatches []existingStatementMatch,
+) ([]statementMatch, map[string]bool) {
+	matches := make([]statementMatch, len(rows))
+	reservedPlaidIDs := make(map[string]bool)
+	for _, existing := range existingMatches {
+		rowIndex := existing.RowNumber - 1
+		if rowIndex < 0 || rowIndex >= len(rows) || reservedPlaidIDs[existing.Plaid.TransactionID] {
+			continue
+		}
+		row := rows[rowIndex]
+		if row.Date != existing.StatementRow.Date ||
+			strings.TrimSpace(row.Merchant) != strings.TrimSpace(existing.StatementRow.Merchant) ||
+			cents(row.Amount) != cents(existing.StatementRow.Amount) {
+			continue
+		}
+		plaid := existing.Plaid
+		matches[rowIndex] = statementMatch{Status: "matched", Plaid: &plaid}
+		reservedPlaidIDs[plaid.TransactionID] = true
+	}
+
+	unmatchedRows := make([]parsedStatementTransaction, 0, len(rows))
+	unmatchedRowIndexes := make([]int, 0, len(rows))
+	for rowIndex, match := range matches {
+		if match.Status == "matched" {
+			continue
+		}
+		unmatchedRows = append(unmatchedRows, rows[rowIndex])
+		unmatchedRowIndexes = append(unmatchedRowIndexes, rowIndex)
+	}
+	availablePlaidRows := make([]plaidStatementTransaction, 0, len(plaidRows))
+	for _, plaid := range plaidRows {
+		if !reservedPlaidIDs[plaid.TransactionID] {
+			availablePlaidRows = append(availablePlaidRows, plaid)
+		}
+	}
+	newMatches, ambiguousPlaidIDs := reconcileStatementRows(unmatchedRows, availablePlaidRows)
+	for index, match := range newMatches {
+		matches[unmatchedRowIndexes[index]] = match
 	}
 	return matches, ambiguousPlaidIDs
 }

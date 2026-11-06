@@ -61,6 +61,63 @@ func TestReconcileStatementRowsConvertsStatementSignToPlaidSign(t *testing.T) {
 	}
 }
 
+func TestReconcileStatementRowsPreservingMatchesKeepsPriorMatchesAndReservesPlaidRows(t *testing.T) {
+	statementRows := []parsedStatementTransaction{
+		{Date: "2026-03-01", Merchant: "Coffee shop", Amount: -12.50},
+		{Date: "2026-03-02", Merchant: "Cafe", Amount: -12.50},
+	}
+	plaidRows := []plaidStatementTransaction{
+		{TransactionID: "previously-selected", Date: "2026-03-01", Merchant: "COFFEE", Amount: 12.50},
+		{TransactionID: "new-match", Date: "2026-03-02", Merchant: "CAFE", Amount: 12.50},
+	}
+	existingMatches := []existingStatementMatch{
+		{
+			RowNumber:    1,
+			StatementRow: parsedStatementTransaction{Date: "2026-03-01", Merchant: "Coffee shop", Amount: -12.50},
+			Plaid:        plaidRows[0],
+		},
+	}
+
+	matches, ambiguousPlaid := reconcileStatementRowsPreservingMatches(
+		statementRows,
+		plaidRows,
+		existingMatches,
+	)
+	if matches[0].Status != "matched" || matches[0].Plaid == nil ||
+		matches[0].Plaid.TransactionID != "previously-selected" {
+		t.Fatalf("first match = %+v, want the previous match preserved", matches[0])
+	}
+	if matches[1].Status != "matched" || matches[1].Plaid == nil ||
+		matches[1].Plaid.TransactionID != "new-match" {
+		t.Fatalf("second match = %+v, want the remaining Plaid transaction matched", matches[1])
+	}
+	if len(ambiguousPlaid) != 0 {
+		t.Fatalf("unexpected ambiguous Plaid transactions: %v", ambiguousPlaid)
+	}
+}
+
+func TestReconcileStatementRowsPreservingMatchesRechecksChangedRows(t *testing.T) {
+	statementRows := []parsedStatementTransaction{
+		{Date: "2026-03-01", Merchant: "Coffee shop", Amount: -13.00},
+	}
+	plaidRows := []plaidStatementTransaction{
+		{TransactionID: "new-match", Date: "2026-03-01", Merchant: "COFFEE", Amount: 13.00},
+	}
+	existingMatches := []existingStatementMatch{
+		{
+			RowNumber:    1,
+			StatementRow: parsedStatementTransaction{Date: "2026-03-01", Merchant: "Coffee shop", Amount: -12.50},
+			Plaid:        plaidStatementTransaction{TransactionID: "previous-match"},
+		},
+	}
+
+	matches, _ := reconcileStatementRowsPreservingMatches(statementRows, plaidRows, existingMatches)
+	if matches[0].Status != "matched" || matches[0].Plaid == nil ||
+		matches[0].Plaid.TransactionID != "new-match" {
+		t.Fatalf("match = %+v, want changed row reconciled against current Plaid transactions", matches[0])
+	}
+}
+
 func TestValidateStatementPeriod(t *testing.T) {
 	if start, end, err := validateStatementPeriod("2026-04-01", "2026-04-30"); err != nil ||
 		start != "2026-04-01" || end != "2026-04-30" {
