@@ -17,7 +17,7 @@ from openpyxl.styles import Font, PatternFill
 
 
 SHORT_DATE_PATTERN = re.compile(r"^(?P<month>\d{1,2})/(?P<day>\d{1,2})(?:/(?P<year>\d{2,4}))?$")
-AMOUNT_PATTERN = re.compile(r"^[+-]?\$?-?\d[\d,]*\.\d{2}$")
+AMOUNT_PATTERN = re.compile(r"^[+-]?\$?-?(?:\d[\d,]*)?\.\d{2}$")
 OPENING_CLOSING_DATE_PATTERN = re.compile(
     r"Opening/Closing Date\s*:?\s*(\d{1,2}/\d{1,2}/\d{2,4})\s*-\s*"
     r"(\d{1,2}/\d{1,2}/\d{2,4})",

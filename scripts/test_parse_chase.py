@@ -35,6 +35,7 @@ class ChaseStatementParserTests(unittest.TestCase):
         self.insert_transaction(page, 350, "10/03", "Boundary purchase", "$12.34")
         self.insert_transaction(page, 375, "10/02", "Outside period", "$99.00")
         self.insert_transaction(page, 400, "11/03", "Coffee Shop", "$4.56")
+        self.insert_transaction(page, 425, "10/04", "Small purchase", ".75")
 
         document.save(path)
         document.close()
@@ -61,10 +62,21 @@ class ChaseStatementParserTests(unittest.TestCase):
                 rows,
                 [
                     {"date": "2026-10-03", "merchant": "Boundary purchase", "amount": -12.34},
+                    {"date": "2026-10-04", "merchant": "Small purchase", "amount": -0.75},
                     {"date": "2026-11-01", "merchant": "Payment from bank", "amount": 50.0},
                     {"date": "2026-11-03", "merchant": "Coffee Shop", "amount": -4.56},
                 ],
             )
+
+    def test_parses_amount_tokens_without_leading_zero(self):
+        for token, expected in (
+            (".75", 0.75),
+            ("-.75", -0.75),
+            ("$.75", 0.75),
+            ("-$.75", -0.75),
+        ):
+            with self.subTest(token=token):
+                self.assertEqual(parse_chase.parse_amount_token(token), expected)
 
     def test_extracts_alternate_minimum_balance_due_label(self):
         balance, minimum_due, interest_saving_due, due_date = parse_chase.extract_statement_balance(
@@ -117,14 +129,14 @@ class ChaseStatementParserTests(unittest.TestCase):
             self.assertEqual(parsed["minimum_payment_due"], 25.0)
             self.assertEqual(parsed["interest_saving_balance_due"], 1100.0)
             self.assertEqual(parsed["payment_due_date"], "2026-11-25")
-            self.assertEqual(len(parsed["transactions"]), 3)
+            self.assertEqual(len(parsed["transactions"]), 4)
 
             worksheet = load_workbook(spreadsheet_path, data_only=True)["Transactions"]
             self.assertEqual(
                 [cell.value for cell in worksheet[1]],
                 ["Date", "Merchant", "Amount"],
             )
-            self.assertEqual(worksheet.max_row, 4)
+            self.assertEqual(worksheet.max_row, 5)
 
 
 if __name__ == "__main__":
