@@ -216,6 +216,7 @@ type ImportedStatementSummary = {
   period_end: string;
   statement_balance: number | null;
   minimum_payment_due: number | null;
+  interest_saving_balance_due: number | null;
   payment_due_date?: string;
   imported_at: string;
   transaction_count: number;
@@ -2068,6 +2069,7 @@ export default function App() {
                 <div><dt>Payment due</dt><dd>{latest.payment_due_date ? displayDate(latest.payment_due_date) : "Not detected"}</dd></div>
                 <div><dt>Statement balance</dt><dd>{money(latest.statement_balance)}</dd></div>
                 <div><dt>Minimum payment due</dt><dd>{money(latest.minimum_payment_due)}</dd></div>
+                <div><dt>Interest-saving balance</dt><dd>{money(latest.interest_saving_balance_due)}</dd></div>
               </dl>
               <span className="statement-open-hint">{latest.transaction_count} transactions · Click to view statement</span>
             </div>
@@ -2130,6 +2132,7 @@ export default function App() {
                   <div><dt>Payment due</dt><dd>{statement.payment_due_date ? displayDate(statement.payment_due_date) : "Not detected"}</dd></div>
                   <div><dt>Statement balance</dt><dd>{money(statement.statement_balance)}</dd></div>
                   <div><dt>Minimum payment due</dt><dd>{money(statement.minimum_payment_due)}</dd></div>
+                  <div><dt>Interest-saving balance</dt><dd>{money(statement.interest_saving_balance_due)}</dd></div>
                 </dl>
                 <div className="statement-import-summary">
                   <span>{statement.transaction_count} statement transactions</span>
@@ -2183,6 +2186,7 @@ export default function App() {
             <div><dt>Payment due</dt><dd>{selectedStatement.payment_due_date ? displayDate(selectedStatement.payment_due_date) : "Not detected"}</dd></div>
             <div><dt>Statement balance</dt><dd>{money(selectedStatement.statement_balance)}</dd></div>
             <div><dt>Minimum payment due</dt><dd>{money(selectedStatement.minimum_payment_due)}</dd></div>
+            <div><dt>Interest-saving balance</dt><dd>{money(selectedStatement.interest_saving_balance_due)}</dd></div>
           </dl>
           <p className="statement-balance-review">
             {selectedStatement.statement_balance !== null && selectedStatement.statement_balance !== undefined

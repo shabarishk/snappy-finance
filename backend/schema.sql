@@ -335,6 +335,7 @@ CREATE TABLE IF NOT EXISTS imported_statements (
     reviewed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
     statement_balance NUMERIC(18, 4),
     minimum_payment_due NUMERIC(18, 4),
+    interest_saving_balance_due NUMERIC(18, 4),
     payment_due_date DATE,
     imported_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CHECK (period_start <= period_end),
@@ -347,6 +348,7 @@ ALTER TABLE imported_statements ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ
 ALTER TABLE imported_statements ADD COLUMN IF NOT EXISTS reviewed_by TEXT REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE imported_statements ADD COLUMN IF NOT EXISTS statement_balance NUMERIC(18, 4);
 ALTER TABLE imported_statements ADD COLUMN IF NOT EXISTS minimum_payment_due NUMERIC(18, 4);
+ALTER TABLE imported_statements ADD COLUMN IF NOT EXISTS interest_saving_balance_due NUMERIC(18, 4);
 ALTER TABLE imported_statements ADD COLUMN IF NOT EXISTS payment_due_date DATE;
 
 DO $$
@@ -368,6 +370,15 @@ BEGIN
         ALTER TABLE imported_statements
             ADD CONSTRAINT imported_statements_minimum_payment_due_check
             CHECK (minimum_payment_due IS NULL OR minimum_payment_due >= 0);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'imported_statements_interest_saving_balance_due_check'
+          AND conrelid = 'imported_statements'::regclass
+    ) THEN
+        ALTER TABLE imported_statements
+            ADD CONSTRAINT imported_statements_interest_saving_balance_due_check
+            CHECK (interest_saving_balance_due IS NULL OR interest_saving_balance_due >= 0);
     END IF;
     IF NOT EXISTS (
         SELECT 1 FROM pg_constraint

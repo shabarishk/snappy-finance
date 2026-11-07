@@ -38,12 +38,13 @@ var bundledStatementParsers = []statementParser{
 }
 
 type parsedStatement struct {
-	PeriodStart       *string                      `json:"period_start"`
-	PeriodEnd         *string                      `json:"period_end"`
-	StatementBalance  *float64                     `json:"statement_balance"`
-	MinimumPaymentDue *float64                     `json:"minimum_payment_due"`
-	PaymentDueDate    *string                      `json:"payment_due_date"`
-	Transactions      []parsedStatementTransaction `json:"transactions"`
+	PeriodStart              *string                      `json:"period_start"`
+	PeriodEnd                *string                      `json:"period_end"`
+	StatementBalance         *float64                     `json:"statement_balance"`
+	MinimumPaymentDue        *float64                     `json:"minimum_payment_due"`
+	InterestSavingBalanceDue *float64                     `json:"interest_saving_balance_due"`
+	PaymentDueDate           *string                      `json:"payment_due_date"`
+	Transactions             []parsedStatementTransaction `json:"transactions"`
 }
 
 type parsedStatementTransaction struct {
@@ -71,24 +72,25 @@ type existingStatementMatch struct {
 }
 
 type importedStatementSummary struct {
-	StatementID         string    `json:"statement_id"`
-	AccountID           string    `json:"account_id"`
-	AccountName         string    `json:"account_name"`
-	ParserID            string    `json:"parser_id"`
-	ReviewStatus        string    `json:"review_status"`
-	Reprocessed         bool      `json:"reprocessed,omitempty"`
-	PeriodStart         string    `json:"period_start"`
-	PeriodEnd           string    `json:"period_end"`
-	StatementBalance    *float64  `json:"statement_balance"`
-	MinimumPaymentDue   *float64  `json:"minimum_payment_due"`
-	PaymentDueDate      string    `json:"payment_due_date,omitempty"`
-	ImportedAt          time.Time `json:"imported_at"`
-	TransactionCount    int       `json:"transaction_count"`
-	MatchedCount        int       `json:"matched_count"`
-	StatementOnlyCount  int       `json:"statement_only_count"`
-	AmbiguousCount      int       `json:"ambiguous_count"`
-	PlaidOnlyCount      int       `json:"plaid_only_count"`
-	AmbiguousPlaidCount int       `json:"ambiguous_plaid_count"`
+	StatementID              string    `json:"statement_id"`
+	AccountID                string    `json:"account_id"`
+	AccountName              string    `json:"account_name"`
+	ParserID                 string    `json:"parser_id"`
+	ReviewStatus             string    `json:"review_status"`
+	Reprocessed              bool      `json:"reprocessed,omitempty"`
+	PeriodStart              string    `json:"period_start"`
+	PeriodEnd                string    `json:"period_end"`
+	StatementBalance         *float64  `json:"statement_balance"`
+	MinimumPaymentDue        *float64  `json:"minimum_payment_due"`
+	InterestSavingBalanceDue *float64  `json:"interest_saving_balance_due"`
+	PaymentDueDate           string    `json:"payment_due_date,omitempty"`
+	ImportedAt               time.Time `json:"imported_at"`
+	TransactionCount         int       `json:"transaction_count"`
+	MatchedCount             int       `json:"matched_count"`
+	StatementOnlyCount       int       `json:"statement_only_count"`
+	AmbiguousCount           int       `json:"ambiguous_count"`
+	PlaidOnlyCount           int       `json:"plaid_only_count"`
+	AmbiguousPlaidCount      int       `json:"ambiguous_plaid_count"`
 }
 
 type statementImportTransaction struct {
@@ -348,18 +350,26 @@ func (a *app) uploadAccountStatement(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "statement parser returned an invalid minimum payment due")
 		return
 	}
+	if parsed.InterestSavingBalanceDue != nil && (math.IsNaN(*parsed.InterestSavingBalanceDue) ||
+		math.IsInf(*parsed.InterestSavingBalanceDue, 0) || *parsed.InterestSavingBalanceDue < 0) {
+		writeError(w, http.StatusUnprocessableEntity, "statement parser returned an invalid interest-saving balance due")
+		return
+	}
 	if parsed.PaymentDueDate != nil {
 		if _, err := time.Parse("2006-01-02", *parsed.PaymentDueDate); err != nil {
 			writeError(w, http.StatusUnprocessableEntity, "statement parser returned an invalid payment due date")
 			return
 		}
 	}
-	var statementBalance, minimumPaymentDue, paymentDueDate any
+	var statementBalance, minimumPaymentDue, interestSavingBalanceDue, paymentDueDate any
 	if parsed.StatementBalance != nil {
 		statementBalance = *parsed.StatementBalance
 	}
 	if parsed.MinimumPaymentDue != nil {
 		minimumPaymentDue = *parsed.MinimumPaymentDue
+	}
+	if parsed.InterestSavingBalanceDue != nil {
+		interestSavingBalanceDue = *parsed.InterestSavingBalanceDue
 	}
 	if parsed.PaymentDueDate != nil {
 		paymentDueDate = *parsed.PaymentDueDate
@@ -422,12 +432,13 @@ func (a *app) uploadAccountStatement(w http.ResponseWriter, r *http.Request) {
 	err = tx.QueryRow(r.Context(), `
 		INSERT INTO imported_statements (
 			statement_id, account_id, account_name, parser_id, period_start, period_end,
-			source_sha256, spreadsheet, statement_balance, minimum_payment_due, payment_due_date, review_status
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending_review')
+			source_sha256, spreadsheet, statement_balance, minimum_payment_due,
+			interest_saving_balance_due, payment_due_date, review_status
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'pending_review')
 		ON CONFLICT (account_id, source_sha256) DO NOTHING
 		RETURNING statement_id`,
 		statementID, r.PathValue("accountID"), accountName, *parserID, periodStart, periodEnd, sourceHash,
-		spreadsheet, statementBalance, minimumPaymentDue, paymentDueDate,
+		spreadsheet, statementBalance, minimumPaymentDue, interestSavingBalanceDue, paymentDueDate,
 	).Scan(&statementID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = tx.QueryRow(r.Context(), `
@@ -451,11 +462,12 @@ func (a *app) uploadAccountStatement(w http.ResponseWriter, r *http.Request) {
 		_, err = tx.Exec(r.Context(), `
 			UPDATE imported_statements
 			SET account_name=$1, parser_id=$2, period_start=$3, period_end=$4,
-			    spreadsheet=$5, statement_balance=$6, minimum_payment_due=$7, payment_due_date=$8,
+			    spreadsheet=$5, statement_balance=$6, minimum_payment_due=$7,
+			    interest_saving_balance_due=$8, payment_due_date=$9,
 			    review_status='pending_review', reviewed_at=NULL, reviewed_by=NULL, imported_at=NOW()
-			WHERE statement_id=$9`,
+			WHERE statement_id=$10`,
 			accountName, *parserID, periodStart, periodEnd, spreadsheet, statementBalance,
-			minimumPaymentDue, paymentDueDate, statementID)
+			minimumPaymentDue, interestSavingBalanceDue, paymentDueDate, statementID)
 		if err != nil {
 			log.Printf("update existing statement import: %v", err)
 			writeError(w, http.StatusInternalServerError, "could not refresh the existing statement import")
@@ -1007,7 +1019,8 @@ func (a *app) downloadImportedStatementSpreadsheet(w http.ResponseWriter, r *htt
 
 const importedStatementSummaryQuery = `
 	SELECT statement_id, account_id, account_name, parser_id, review_status, period_start::text, period_end::text,
-	       statement_balance, minimum_payment_due, COALESCE(payment_due_date::text, ''), imported_at,
+	       statement_balance, minimum_payment_due, interest_saving_balance_due,
+	       COALESCE(payment_due_date::text, ''), imported_at,
 	       (SELECT COUNT(*) FROM statement_import_transactions t WHERE t.statement_id=s.statement_id),
 	       (SELECT COUNT(*) FROM statement_import_transactions t WHERE t.statement_id=s.statement_id AND t.match_status='matched'),
 	       (SELECT COUNT(*) FROM statement_import_transactions t WHERE t.statement_id=s.statement_id AND t.match_status='statement_only'),
@@ -1024,6 +1037,7 @@ func scanImportedStatementSummary(row statementSummaryRow, summary *importedStat
 	return row.Scan(
 		&summary.StatementID, &summary.AccountID, &summary.AccountName, &summary.ParserID, &summary.ReviewStatus,
 		&summary.PeriodStart, &summary.PeriodEnd, &summary.StatementBalance, &summary.MinimumPaymentDue,
+		&summary.InterestSavingBalanceDue,
 		&summary.PaymentDueDate,
 		&summary.ImportedAt, &summary.TransactionCount,
 		&summary.MatchedCount, &summary.StatementOnlyCount, &summary.AmbiguousCount,
@@ -1037,6 +1051,7 @@ func (a *app) loadImportedStatementSummary(ctx context.Context, statementID stri
 		Scan(
 			&summary.StatementID, &summary.AccountID, &summary.AccountName, &summary.ParserID, &summary.ReviewStatus,
 			&summary.PeriodStart, &summary.PeriodEnd, &summary.StatementBalance, &summary.MinimumPaymentDue,
+			&summary.InterestSavingBalanceDue,
 			&summary.PaymentDueDate,
 			&summary.ImportedAt, &summary.TransactionCount,
 			&summary.MatchedCount, &summary.StatementOnlyCount, &summary.AmbiguousCount,

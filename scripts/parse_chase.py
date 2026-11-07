@@ -32,7 +32,13 @@ STATEMENT_BALANCE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 MINIMUM_PAYMENT_DUE_PATTERN = re.compile(
-    r"\bminimum\s+payment\s+due\b\s*:?\s*\$?\s*((?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2})",
+    r"\bminimum\s+(?:payment|balance|amount)\s+due\b"
+    r"\s*:?\s*\$?\s*((?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2})",
+    re.IGNORECASE,
+)
+INTEREST_SAVING_BALANCE_DUE_PATTERN = re.compile(
+    r"\binterest\s+saving\s+balance(?:\s+due)?\b"
+    r"\s*:?\s*\$?\s*((?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2})",
     re.IGNORECASE,
 )
 PAYMENT_DUE_DATE_PATTERN = re.compile(
@@ -84,10 +90,13 @@ def extract_statement_period(text: str) -> tuple[str | None, str | None]:
     return start.date().isoformat(), end.date().isoformat()
 
 
-def extract_statement_balance(text: str) -> tuple[float | None, float | None, str | None]:
+def extract_statement_balance(
+    text: str,
+) -> tuple[float | None, float | None, float | None, str | None]:
     normalized_text = re.sub(r"\s+", " ", text)
     balance_match = STATEMENT_BALANCE_PATTERN.search(normalized_text)
     minimum_payment_match = MINIMUM_PAYMENT_DUE_PATTERN.search(normalized_text)
+    interest_saving_balance_match = INTEREST_SAVING_BALANCE_DUE_PATTERN.search(normalized_text)
     due_date_match = PAYMENT_DUE_DATE_PATTERN.search(normalized_text)
     balance = (
         float(balance_match.group(1).replace(",", ""))
@@ -99,12 +108,17 @@ def extract_statement_balance(text: str) -> tuple[float | None, float | None, st
         if minimum_payment_match
         else None
     )
+    interest_saving_balance_due = (
+        float(interest_saving_balance_match.group(1).replace(",", ""))
+        if interest_saving_balance_match
+        else None
+    )
     due_date = (
         parse_slash_date(due_date_match.group(1)).date().isoformat()
         if due_date_match
         else None
     )
-    return balance, minimum_payment_due, due_date
+    return balance, minimum_payment_due, interest_saving_balance_due, due_date
 
 
 def parse_transaction_date(text: str, statement_date: datetime) -> datetime | None:
@@ -164,13 +178,16 @@ def extract_statement(
     pdf_path: Path,
     override_start: str | None = None,
     override_end: str | None = None,
-) -> tuple[str | None, str | None, float | None, float | None, str | None, list[dict[str, Any]]]:
+) -> tuple[str | None, str | None, float | None, float | None, float | None, str | None, list[dict[str, Any]]]:
     with pymupdf.open(pdf_path) as document:
         statement_text = " ".join(page.get_text() for page in document)
         period_start, period_end = extract_statement_period(statement_text)
-        statement_balance, minimum_payment_due, payment_due_date = extract_statement_balance(
-            statement_text
-        )
+        (
+            statement_balance,
+            minimum_payment_due,
+            interest_saving_balance_due,
+            payment_due_date,
+        ) = extract_statement_balance(statement_text)
 
         if override_start or override_end:
             if not override_start or not override_end:
@@ -345,6 +362,7 @@ def extract_statement(
         period_end,
         statement_balance,
         minimum_payment_due,
+        interest_saving_balance_due,
         payment_due_date,
         transactions,
     )
@@ -358,7 +376,7 @@ def parse_iso_date(value: str, label: str) -> datetime:
 
 
 def extract_transactions(pdf_path: Path) -> list[dict[str, Any]]:
-    _, _, _, _, _, rows = extract_statement(pdf_path)
+    _, _, _, _, _, _, rows = extract_statement(pdf_path)
     return [
         {
             "Date": datetime.strptime(row["date"], "%Y-%m-%d"),
@@ -410,6 +428,7 @@ def main() -> int:
             period_end,
             statement_balance,
             minimum_payment_due,
+            interest_saving_balance_due,
             payment_due_date,
             rows,
         ) = extract_statement(args.input, args.period_start, args.period_end)
@@ -422,6 +441,7 @@ def main() -> int:
                     "period_end": period_end,
                     "statement_balance": statement_balance,
                     "minimum_payment_due": minimum_payment_due,
+                    "interest_saving_balance_due": interest_saving_balance_due,
                     "payment_due_date": payment_due_date,
                     "transactions": rows,
                 }
