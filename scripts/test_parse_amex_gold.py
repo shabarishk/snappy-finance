@@ -11,7 +11,7 @@ import parse_amex_gold
 
 
 class AmexGoldStatementParserTests(unittest.TestCase):
-    def create_statement(self, path: Path) -> None:
+    def create_statement(self, path: Path, include_billing_period: bool = True) -> None:
         document = pymupdf.open()
         summary = document.new_page(width=612, height=792)
         summary.insert_text((20, 30), "American Express Gold Card")
@@ -23,6 +23,8 @@ class AmexGoldStatementParserTests(unittest.TestCase):
         summary.insert_text((20, 155), "$40.00")
         summary.insert_text((20, 180), "Payment Due Date")
         summary.insert_text((20, 195), "12/01/26")
+        if include_billing_period:
+            summary.insert_text((20, 225), "Days in Billing Period: 30")
 
         details = document.new_page(width=612, height=792)
         details.insert_text((50, 30), "Payments Details")
@@ -68,7 +70,7 @@ class AmexGoldStatementParserTests(unittest.TestCase):
                 parse_amex_gold.extract_statement(pdf_path)
             )
 
-        self.assertIsNone(period_start)
+        self.assertEqual(period_start, "2026-10-08")
         self.assertEqual(period_end, "2026-11-06")
         self.assertEqual(statement_date, "2026-11-06")
         self.assertEqual(due_date, "2026-12-01")
@@ -95,6 +97,16 @@ class AmexGoldStatementParserTests(unittest.TestCase):
         self.assertEqual((period_start, period_end), ("2026-10-07", "2026-11-06"))
         self.assertEqual(statement_date, "2026-11-06")
 
+    def test_leaves_period_start_empty_when_billing_period_is_not_in_statement(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            pdf_path = Path(temporary_directory) / "amex-gold.pdf"
+            self.create_statement(pdf_path, include_billing_period=False)
+
+            period_start, period_end, *_ = parse_amex_gold.extract_statement(pdf_path)
+
+        self.assertIsNone(period_start)
+        self.assertEqual(period_end, "2026-11-06")
+
     def test_cli_writes_json_and_spreadsheet(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -118,7 +130,7 @@ class AmexGoldStatementParserTests(unittest.TestCase):
                 self.assertEqual(parse_amex_gold.main(), 0)
 
             parsed = json.loads(json_path.read_text(encoding="utf-8"))
-            self.assertIsNone(parsed["period_start"])
+            self.assertEqual(parsed["period_start"], "2026-10-08")
             self.assertEqual(parsed["period_end"], "2026-11-06")
             self.assertEqual(parsed["statement_date"], "2026-11-06")
             self.assertEqual(parsed["payment_due_date"], "2026-12-01")

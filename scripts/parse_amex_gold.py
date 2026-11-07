@@ -7,7 +7,7 @@ import argparse
 import json
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +34,10 @@ STATEMENT_BALANCE_PATTERN = re.compile(
 MINIMUM_PAYMENT_DUE_PATTERN = re.compile(
     r"\bminimum\s+(?:payment|balance|amount)\s+due\b"
     r"\s*:?\s*\$?\s*((?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2})",
+    re.IGNORECASE,
+)
+BILLING_PERIOD_DAYS_PATTERN = re.compile(
+    r"\bdays\s+in\s+billing\s+period\b\s*:?\s*(\d{1,3})\b",
     re.IGNORECASE,
 )
 DETAIL_SECTION_PATTERN = re.compile(
@@ -231,8 +235,19 @@ def extract_statement(
     if not transactions:
         raise RuntimeError("No transactions were found in the statement details.")
 
+    billing_period_match = BILLING_PERIOD_DAYS_PATTERN.search(
+        re.sub(r"\s+", " ", statement_text)
+    )
     period_start = None
     period_end = statement_date
+    if billing_period_match:
+        billing_period_days = int(billing_period_match.group(1))
+        if not 1 <= billing_period_days <= 366:
+            raise RuntimeError("The statement billing-period length is invalid.")
+        closing_date = datetime.strptime(statement_date, "%Y-%m-%d").date()
+        period_start = (
+            closing_date - timedelta(days=billing_period_days - 1)
+        ).isoformat()
     if override_start or override_end:
         if not override_start or not override_end:
             raise RuntimeError("Both statement period dates must be provided.")
