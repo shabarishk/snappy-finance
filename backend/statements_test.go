@@ -151,10 +151,12 @@ func TestStatementParserScriptForBundledParsers(t *testing.T) {
 	cfg := config{
 		statementParserScript: "scripts/parse_bilt_app.py",
 		chaseParserScript:     "scripts/parse_chase.py",
+		amexGoldParserScript:  "scripts/parse_amex_gold.py",
 	}
 	for parserID, want := range map[string]string{
-		"bilt":  cfg.statementParserScript,
-		"chase": cfg.chaseParserScript,
+		"bilt":      cfg.statementParserScript,
+		"chase":     cfg.chaseParserScript,
+		"amex_gold": cfg.amexGoldParserScript,
 	} {
 		got, ok := statementParserScriptFor(parserID, cfg)
 		if !ok || got != want {

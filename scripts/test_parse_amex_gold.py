@@ -64,10 +64,12 @@ class AmexGoldStatementParserTests(unittest.TestCase):
             pdf_path = Path(temporary_directory) / "amex-gold.pdf"
             self.create_statement(pdf_path)
 
-            statement_date, due_date, balance, minimum_due, transactions = (
+            period_start, period_end, statement_date, due_date, balance, minimum_due, transactions = (
                 parse_amex_gold.extract_statement(pdf_path)
             )
 
+        self.assertIsNone(period_start)
+        self.assertEqual(period_end, "2026-11-06")
         self.assertEqual(statement_date, "2026-11-06")
         self.assertEqual(due_date, "2026-12-01")
         self.assertEqual((balance, minimum_due), (361.88, 40.0))
@@ -80,6 +82,18 @@ class AmexGoldStatementParserTests(unittest.TestCase):
                 {"date": "2026-11-02", "merchant": "AMAZON MARKETPLACE", "amount": -0.75},
             ],
         )
+
+    def test_accepts_application_period_overrides(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            pdf_path = Path(temporary_directory) / "amex-gold.pdf"
+            self.create_statement(pdf_path)
+
+            period_start, period_end, statement_date, *_ = parse_amex_gold.extract_statement(
+                pdf_path, "2026-10-07", "2026-11-06"
+            )
+
+        self.assertEqual((period_start, period_end), ("2026-10-07", "2026-11-06"))
+        self.assertEqual(statement_date, "2026-11-06")
 
     def test_cli_writes_json_and_spreadsheet(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -104,6 +118,8 @@ class AmexGoldStatementParserTests(unittest.TestCase):
                 self.assertEqual(parse_amex_gold.main(), 0)
 
             parsed = json.loads(json_path.read_text(encoding="utf-8"))
+            self.assertIsNone(parsed["period_start"])
+            self.assertEqual(parsed["period_end"], "2026-11-06")
             self.assertEqual(parsed["statement_date"], "2026-11-06")
             self.assertEqual(parsed["payment_due_date"], "2026-12-01")
             self.assertEqual(parsed["statement_balance"], 361.88)

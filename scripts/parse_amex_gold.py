@@ -206,7 +206,19 @@ def extract_transactions(document: pymupdf.Document) -> list[dict[str, Any]]:
     return transactions
 
 
-def extract_statement(pdf_path: Path) -> tuple[str | None, str | None, float | None, float | None, list[dict[str, Any]]]:
+def extract_statement(
+    pdf_path: Path,
+    override_start: str | None = None,
+    override_end: str | None = None,
+) -> tuple[
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    float | None,
+    float | None,
+    list[dict[str, Any]],
+]:
     with pymupdf.open(pdf_path) as document:
         statement_text = " ".join(page.get_text() for page in document)
         statement_date, payment_due_date, statement_balance, minimum_payment_due = (
@@ -218,7 +230,31 @@ def extract_statement(pdf_path: Path) -> tuple[str | None, str | None, float | N
         raise RuntimeError("Could not find the statement closing date.")
     if not transactions:
         raise RuntimeError("No transactions were found in the statement details.")
-    return statement_date, payment_due_date, statement_balance, minimum_payment_due, transactions
+
+    period_start = None
+    period_end = statement_date
+    if override_start or override_end:
+        if not override_start or not override_end:
+            raise RuntimeError("Both statement period dates must be provided.")
+        try:
+            start_date = datetime.strptime(override_start, "%Y-%m-%d")
+            end_date = datetime.strptime(override_end, "%Y-%m-%d")
+        except ValueError as exc:
+            raise RuntimeError("Statement period dates must be YYYY-MM-DD.") from exc
+        if start_date > end_date:
+            raise RuntimeError("Statement period start must be on or before its end.")
+        period_start = start_date.date().isoformat()
+        period_end = end_date.date().isoformat()
+
+    return (
+        period_start,
+        period_end,
+        statement_date,
+        payment_due_date,
+        statement_balance,
+        minimum_payment_due,
+        transactions,
+    )
 
 
 def write_spreadsheet(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -250,17 +286,27 @@ def main() -> int:
     parser.add_argument("--input", type=Path, required=True, help="Statement PDF")
     parser.add_argument("--json-output", type=Path, required=True)
     parser.add_argument("--spreadsheet-output", type=Path, required=True)
+    parser.add_argument("--period-start")
+    parser.add_argument("--period-end")
     args = parser.parse_args()
 
     try:
-        statement_date, payment_due_date, statement_balance, minimum_payment_due, transactions = (
-            extract_statement(args.input)
-        )
+        (
+            period_start,
+            period_end,
+            statement_date,
+            payment_due_date,
+            statement_balance,
+            minimum_payment_due,
+            transactions,
+        ) = extract_statement(args.input, args.period_start, args.period_end)
         write_spreadsheet(args.spreadsheet_output, transactions)
         args.json_output.parent.mkdir(parents=True, exist_ok=True)
         args.json_output.write_text(
             json.dumps(
                 {
+                    "period_start": period_start,
+                    "period_end": period_end,
                     "statement_date": statement_date,
                     "payment_due_date": payment_due_date,
                     "statement_balance": statement_balance,

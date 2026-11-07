@@ -34,6 +34,7 @@ type config struct {
 	plaidSecret           string
 	statementParserScript string
 	chaseParserScript     string
+	amexGoldParserScript  string
 	syncInterval          time.Duration
 	demoData              bool
 }
@@ -160,6 +161,7 @@ func loadConfig() (config, error) {
 	cfg.plaidSecret = os.Getenv("PLAID_SECRET")
 	cfg.statementParserScript = env("STATEMENT_PARSER_SCRIPT", "scripts/parse_bilt_app.py")
 	cfg.chaseParserScript = env("CHASE_STATEMENT_PARSER_SCRIPT", "scripts/parse_chase.py")
+	cfg.amexGoldParserScript = env("AMEX_GOLD_STATEMENT_PARSER_SCRIPT", "scripts/parse_amex_gold.py")
 	cfg.syncInterval = 6 * time.Hour
 	if value := os.Getenv("DEMO_DATA"); value != "" {
 		cfg.demoData, err = strconv.ParseBool(value)

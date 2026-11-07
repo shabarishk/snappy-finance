@@ -35,6 +35,7 @@ type statementParser struct {
 var bundledStatementParsers = []statementParser{
 	{ParserID: "bilt", DisplayName: "Bilt card statement"},
 	{ParserID: "chase", DisplayName: "Chase credit card statement"},
+	{ParserID: "amex_gold", DisplayName: "American Express Gold statement"},
 }
 
 type parsedStatement struct {
@@ -1304,6 +1305,8 @@ func statementParserScriptFor(parserID string, cfg config) (string, bool) {
 		return cfg.statementParserScript, true
 	case "chase":
 		return cfg.chaseParserScript, true
+	case "amex_gold":
+		return cfg.amexGoldParserScript, true
 	default:
 		return "", false
 	}
