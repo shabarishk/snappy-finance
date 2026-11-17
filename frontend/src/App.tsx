@@ -2033,54 +2033,73 @@ export default function App() {
   );
 
   const statementsAccountPanel = (
-    <section className="statement-account-grid" aria-label="Accounts with statements">
+    <section className="panel statement-account-panel" aria-label="Accounts with statements">
       {statementsByAccount.length === 0 ? (
-        <div className="panel empty-state">
+        <div className="empty-state">
           <strong>No statements have been imported yet</strong>
           <span>Uploaded statements will be grouped here by account.</span>
         </div>
-      ) : statementsByAccount.map((group) => {
-        const latest = group.latest;
-        const hasLatest = statementIsLatestOnFile(latest, group.account);
-        return (
-          <article className="panel statement-account-card" key={group.accountID}>
-            <header className="statement-account-card-heading">
-              <div><span className="statement-account-icon"><FileText size={17} /></span><h2>{group.accountName}</h2></div>
-              <span className={`statement-freshness ${hasLatest ? "current" : "missing"}`}>
-                {hasLatest ? "Latest statement on file" : "Latest statement missing"}
-              </span>
-            </header>
-            <div
-              role="button"
-              tabIndex={0}
-              className="statement-latest-summary"
-              onClick={() => void loadStatementDetails(latest.statement_id)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  void loadStatementDetails(latest.statement_id);
-                }
-              }}
-              aria-label={`Open latest available statement for ${group.accountName}`}
-            >
-              <span className="statement-latest-label">Most recent statement on file</span>
-              <dl className="statement-metadata-grid">
-                <div><dt>Statement date</dt><dd>{displayDate(latest.period_end)}</dd></div>
-                <div><dt>Payment due</dt><dd>{latest.payment_due_date ? displayDate(latest.payment_due_date) : "Not detected"}</dd></div>
-                <div><dt>Statement balance</dt><dd>{money(latest.statement_balance)}</dd></div>
-                <div><dt>Minimum payment due</dt><dd>{money(latest.minimum_payment_due)}</dd></div>
-                <div><dt>Interest-saving balance</dt><dd>{money(latest.interest_saving_balance_due)}</dd></div>
-              </dl>
-              <span className="statement-open-hint">{latest.transaction_count} transactions · Click to view statement</span>
-            </div>
-            <button
-              type="button"
-              className="secondary-button statement-show-all"
-              onClick={() => setStatementAccountViewID(group.accountID)}
-            >Show all Statements <ChevronRight size={15} /><span>({group.statements.length})</span></button>
-          </article>
-        );
-      })}
+      ) : (
+        <div className="statement-account-table-wrap">
+          <table className="statement-account-table">
+            <thead>
+              <tr>
+                <th scope="col">Account</th>
+                <th scope="col">Statement status</th>
+                <th scope="col">Latest statement</th>
+                <th scope="col">Payment due</th>
+                <th scope="col">Statement balance</th>
+                <th scope="col">Minimum payment</th>
+                <th scope="col">Interest-saving balance</th>
+                <th scope="col">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {statementsByAccount.map((group) => {
+                const latest = group.latest;
+                const hasLatest = statementIsLatestOnFile(latest, group.account);
+                return (
+                  <tr key={group.accountID}>
+                    <th scope="row">
+                      <span className="statement-account-name">
+                        <span className="statement-account-icon"><FileText size={17} /></span>
+                        <span>{group.accountName}</span>
+                      </span>
+                    </th>
+                    <td>
+                      <span className={`statement-freshness ${hasLatest ? "current" : "missing"}`}>
+                        {hasLatest ? "Latest on file" : "Latest missing"}
+                      </span>
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="statement-latest-summary"
+                        onClick={() => void loadStatementDetails(latest.statement_id)}
+                        aria-label={`Open latest available statement for ${group.accountName}`}
+                      >
+                        <span>{displayDate(latest.period_end)}</span>
+                        <small>{latest.transaction_count} transactions · View statement</small>
+                      </button>
+                    </td>
+                    <td>{latest.payment_due_date ? displayDate(latest.payment_due_date) : "Not detected"}</td>
+                    <td>{money(latest.statement_balance)}</td>
+                    <td>{money(latest.minimum_payment_due)}</td>
+                    <td>{money(latest.interest_saving_balance_due)}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="secondary-button statement-show-all"
+                        onClick={() => setStatementAccountViewID(group.accountID)}
+                      >Show all <ChevronRight size={15} /><span>({group.statements.length})</span></button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </section>
   );
 
