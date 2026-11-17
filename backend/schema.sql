@@ -512,6 +512,26 @@ CREATE INDEX IF NOT EXISTS transactions_category_idx ON transactions (category_i
 CREATE INDEX IF NOT EXISTS transactions_category_match_key_idx ON transactions (category_match_key);
 CREATE INDEX IF NOT EXISTS transactions_transfer_amount_date_idx ON transactions (amount, transaction_date);
 
+CREATE TABLE IF NOT EXISTS events (
+    event_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    name TEXT NOT NULL CHECK (LENGTH(BTRIM(name)) BETWEEN 1 AND 100),
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (start_date <= end_date)
+);
+
+CREATE TABLE IF NOT EXISTS event_transactions (
+    event_id TEXT NOT NULL REFERENCES events(event_id) ON DELETE CASCADE,
+    transaction_id TEXT NOT NULL,
+    included BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (event_id, transaction_id)
+);
+
+CREATE INDEX IF NOT EXISTS event_transactions_transaction_id_idx
+    ON event_transactions (transaction_id);
+
 CREATE TABLE IF NOT EXISTS subscription_payment_history (
     history_id BIGSERIAL PRIMARY KEY,
     expense_id BIGINT NOT NULL REFERENCES scheduled_projection_expenses(expense_id) ON DELETE CASCADE,

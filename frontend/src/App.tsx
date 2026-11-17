@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, Banknote, ChevronDown, ChevronLeft, ChevronRight, Eye, EyeOff, FileText, Filter, Landmark, LockKeyhole, LogOut, Menu, RefreshCw, UsersRound, Wallet, X } from "lucide-react";
+import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, Banknote, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Eye, EyeOff, FileText, Filter, Landmark, LockKeyhole, LogOut, Menu, Plus, RefreshCw, UsersRound, Wallet, X } from "lucide-react";
 
 type Profile = {
   id: string;
@@ -200,6 +200,29 @@ type Transaction = {
   is_statement_import?: boolean;
 };
 
+type FinanceEvent = {
+  event_id: string;
+  name: string;
+  start_date: string;
+  end_date: string;
+  transaction_count: number;
+  total_expenses: number;
+};
+
+type EventTransaction = {
+  transaction_id: string;
+  account_id: string;
+  account_name: string;
+  name: string;
+  merchant_name: string | null;
+  amount: number;
+  date: string;
+  iso_currency_code: string | null;
+  category_id: string | null;
+  category_label: string | null;
+  included: boolean;
+};
+
 type StatementParser = {
   parser_id: string;
   display_name: string;
@@ -308,6 +331,63 @@ type LiquidityTransactionsDialog = {
 };
 
 const liquidityChartColors = ["#198568", "#4a9b78", "#79b58e", "#a6c89e", "#d0d99c", "#e5b86d", "#d98268", "#9e829b", "#6f8ba5"];
+
+function getEventRoute() {
+  const path = window.location.pathname.split("/").filter(Boolean);
+  return path[0] === "events"
+    ? { isEvents: true, eventID: path.length > 2 ? decodeURIComponent(path[2]) : null }
+    : { isEvents: false, eventID: null };
+}
+
+function eventURL(event: FinanceEvent) {
+  const slug = event.name.normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "") || "event";
+  return `/events/${slug}/${encodeURIComponent(event.event_id)}`;
+}
+
+function EventPieChart({ title, data }: { title: string; data: { label: string; amount: number }[] }) {
+  const total = data.reduce((sum, item) => sum + item.amount, 0);
+  let startAngle = -Math.PI / 2;
+  const slices = data.map((item, index) => {
+    const angle = total > 0 ? item.amount / total * Math.PI * 2 : 0;
+    const endAngle = startAngle + angle;
+    const startX = 100 + 88 * Math.cos(startAngle);
+    const startY = 100 + 88 * Math.sin(startAngle);
+    const endX = 100 + 88 * Math.cos(endAngle);
+    const endY = 100 + 88 * Math.sin(endAngle);
+    const path = data.length === 1
+      ? ""
+      : `M 100 100 L ${startX} ${startY} A 88 88 0 ${angle > Math.PI ? 1 : 0} 1 ${endX} ${endY} Z`;
+    startAngle = endAngle;
+    return { ...item, color: liquidityChartColors[index % liquidityChartColors.length], path };
+  });
+  return (
+    <section className="panel event-chart-panel">
+      <div className="panel-heading"><div><h2>{title}</h2><p>{money(total)}</p></div></div>
+      {total > 0 ? (
+        <div className="event-chart-content">
+          <svg className="event-pie" viewBox="0 0 200 200" role="img" aria-label={`${title}, totaling ${money(total)}`}>
+            {slices.map((slice) => slice.path
+              ? <path key={slice.label} d={slice.path} fill={slice.color}><title>{slice.label}: {money(slice.amount)}</title></path>
+              : <circle key={slice.label} cx="100" cy="100" r="88" fill={slice.color}><title>{slice.label}: {money(slice.amount)}</title></circle>)}
+          </svg>
+          <ul className="event-chart-legend">
+            {slices.map((slice) => (
+              <li key={slice.label}>
+                <span className="liquidity-legend-color" style={{ backgroundColor: slice.color }} />
+                <span className="liquidity-legend-label" title={slice.label}>{slice.label}</span>
+                <strong>{money(slice.amount)}</strong>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : <div className="liquidity-empty">No included expenses to summarize yet.</div>}
+    </section>
+  );
+}
 
 function SpendingPieChart({
   month,
@@ -529,7 +609,8 @@ function statementIsLatestOnFile(statement: ImportedStatementSummary, account?: 
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [activePage, setActivePage] = useState<"overview" | "accounts" | "administration" | "transactions" | "projections" | "statements">(() => {
+  const [activePage, setActivePage] = useState<"overview" | "accounts" | "administration" | "transactions" | "projections" | "statements" | "events">(() => {
+    if (getEventRoute().isEvents) return "events";
     if (window.location.hash === "#accounts") return "accounts";
     if (window.location.hash === "#administration") return "administration";
     if (window.location.hash === "#transactions") return "transactions";
@@ -591,6 +672,20 @@ export default function App() {
   const [statementFileInputKey, setStatementFileInputKey] = useState(0);
   const [uploadingStatement, setUploadingStatement] = useState(false);
   const [reviewingStatementID, setReviewingStatementID] = useState<string | null>(null);
+  const [events, setEvents] = useState<FinanceEvent[]>([]);
+  const [selectedEventID, setSelectedEventID] = useState<string | null>(() => getEventRoute().eventID);
+  const [selectedEvent, setSelectedEvent] = useState<FinanceEvent | null>(null);
+  const [eventTransactions, setEventTransactions] = useState<EventTransaction[]>([]);
+  const [eventsLoading, setEventsLoading] = useState(false);
+  const [eventTransactionsLoading, setEventTransactionsLoading] = useState(false);
+  const [eventFormOpen, setEventFormOpen] = useState(false);
+  const [eventName, setEventName] = useState("");
+  const [eventStartDate, setEventStartDate] = useState(() => transactionDateKey(new Date()));
+  const [eventEndDate, setEventEndDate] = useState(() => transactionDateKey(new Date()));
+  const [eventSearchFrom, setEventSearchFrom] = useState("");
+  const [eventSearchTo, setEventSearchTo] = useState("");
+  const [creatingEvent, setCreatingEvent] = useState(false);
+  const [updatingEventTransactionID, setUpdatingEventTransactionID] = useState<string | null>(null);
   const [savingStatementParserAccountID, setSavingStatementParserAccountID] = useState<string | null>(null);
   const [updatingAccountCalculationID, setUpdatingAccountCalculationID] = useState<string | null>(null);
   const [transactionCategories, setTransactionCategories] = useState<TransactionCategory[]>([]);
@@ -635,7 +730,14 @@ export default function App() {
   const monthPickerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const syncPageFromHash = () => {
+    const syncPageFromLocation = () => {
+      const eventRoute = getEventRoute();
+      if (eventRoute.isEvents) {
+        setSelectedEventID(eventRoute.eventID);
+        setActivePage("events");
+        return;
+      }
+      setSelectedEventID(null);
       if (window.location.hash === "#accounts") setActivePage("accounts");
       else if (window.location.hash === "#administration") setActivePage("administration");
       else if (window.location.hash === "#transactions") setActivePage("transactions");
@@ -643,8 +745,12 @@ export default function App() {
       else if (window.location.hash === "#statements") setActivePage("statements");
       else setActivePage("overview");
     };
-    window.addEventListener("hashchange", syncPageFromHash);
-    return () => window.removeEventListener("hashchange", syncPageFromHash);
+    window.addEventListener("hashchange", syncPageFromLocation);
+    window.addEventListener("popstate", syncPageFromLocation);
+    return () => {
+      window.removeEventListener("hashchange", syncPageFromLocation);
+      window.removeEventListener("popstate", syncPageFromLocation);
+    };
   }, []);
 
   useEffect(() => {
@@ -717,8 +823,11 @@ export default function App() {
     };
   }, [dashboardPreferencesOpen, expandedStatementID, liquidityTransactionsDialog, pendingCategoryChange, projectionAssumptionsOpen, scheduledExpensesOpen, sidebarOpen, statementUploadOpen, transactionFiltersOpen]);
 
-  function navigateToPage(page: "overview" | "accounts" | "administration" | "transactions" | "projections" | "statements") {
+  function navigateToPage(page: "overview" | "accounts" | "administration" | "transactions" | "projections" | "statements" | "events") {
     setActivePage(page);
+    setSelectedEventID(null);
+    setSelectedEvent(null);
+    setEventTransactions([]);
     setSidebarOpen(false);
     setDashboardPreferencesOpen(false);
     setTransactionFiltersOpen(false);
@@ -728,7 +837,19 @@ export default function App() {
     setStatementAccountViewID(null);
     setExpandedStatementID(null);
     setStatementUploadOpen(false);
-    if (window.location.hash !== `#${page}`) window.location.hash = page;
+    const url = page === "events" ? "/events" : page === "overview" ? "/" : `/#${page}`;
+    window.history.pushState(null, "", url);
+  }
+
+  function navigateToEvent(event: FinanceEvent) {
+    setSelectedEventID(event.event_id);
+    setSelectedEvent(event);
+    setEventTransactions([]);
+    setEventSearchFrom("");
+    setEventSearchTo("");
+    setActivePage("events");
+    setSidebarOpen(false);
+    window.history.pushState(null, "", eventURL(event));
   }
 
   const refresh = useCallback(async () => {
@@ -755,6 +876,62 @@ export default function App() {
       setLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (!profile || activePage !== "events") return;
+    let cancelled = false;
+    setEventsLoading(true);
+    api<FinanceEvent[]>("/api/events")
+      .then((eventRows) => {
+        if (!cancelled) setEvents(eventRows);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Could not load events");
+      })
+      .finally(() => {
+        if (!cancelled) setEventsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activePage, profile?.id]);
+
+  useEffect(() => {
+    if (!profile || activePage !== "events" || !selectedEventID) {
+      setSelectedEvent(null);
+      setEventTransactions([]);
+      return;
+    }
+    let cancelled = false;
+    setEventTransactionsLoading(true);
+    const encodedEventID = encodeURIComponent(selectedEventID);
+    const params = new URLSearchParams();
+    if (eventSearchFrom && eventSearchTo) {
+      params.set("from", eventSearchFrom);
+      params.set("to", eventSearchTo);
+    }
+    const query = params.toString();
+    const suffix = query ? `?${query}` : "";
+    Promise.all([
+      api<FinanceEvent>(`/api/events/${encodedEventID}`),
+      api<EventTransaction[]>(`/api/events/${encodedEventID}/transactions${suffix}`),
+    ])
+      .then(([event, expenseRows]) => {
+        if (cancelled) return;
+        setSelectedEvent(event);
+        setEventTransactions(expenseRows);
+        setEvents((current) => current.map((item) => item.event_id === event.event_id ? event : item));
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Could not load event details");
+      })
+      .finally(() => {
+        if (!cancelled) setEventTransactionsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activePage, eventSearchFrom, eventSearchTo, profile?.id, selectedEventID]);
 
   useEffect(() => {
     api<{ authenticated: boolean; user: Profile | null }>("/api/auth/session")
@@ -1145,19 +1322,36 @@ export default function App() {
     );
   }, [statementAccountViewID, statementImports, statementsByAccount]);
   const viewedStatementAccount = statementsByAccount.find((item) => item.accountID === statementAccountViewID);
+  const eventCategoryBreakdown = useMemo(() => {
+    const totals = new Map<string, number>();
+    eventTransactions.filter((item) => item.included).forEach((item) => {
+      const label = item.category_label || "Uncategorized";
+      totals.set(label, (totals.get(label) ?? 0) + item.amount);
+    });
+    return Array.from(totals, ([label, amount]) => ({ label, amount })).sort((left, right) => right.amount - left.amount);
+  }, [eventTransactions]);
+  const eventAccountBreakdown = useMemo(() => {
+    const totals = new Map<string, number>();
+    eventTransactions.filter((item) => item.included).forEach((item) => {
+      totals.set(item.account_name, (totals.get(item.account_name) ?? 0) + item.amount);
+    });
+    return Array.from(totals, ([label, amount]) => ({ label, amount })).sort((left, right) => right.amount - left.amount);
+  }, [eventTransactions]);
 
   const pageTitle = activePage === "administration"
     ? "Administration"
     : activePage === "accounts" ? "Accounts"
       : activePage === "transactions" ? "Transactions"
         : activePage === "projections" ? "Projections"
-          : activePage === "statements" ? "Statements" : "Overview";
+          : activePage === "statements" ? "Statements"
+            : activePage === "events" ? selectedEvent?.name ?? "Events" : "Overview";
   const pageEyebrow = activePage === "accounts"
     ? "CONNECTED ACCOUNTS"
     : activePage === "administration"
     ? "ADMINISTRATION"
     : activePage === "projections" ? "INCOME FORECAST"
-      : activePage === "statements" ? "STATEMENT HISTORY" : "YOUR FINANCES";
+      : activePage === "statements" ? "STATEMENT HISTORY"
+        : activePage === "events" ? "EVENT SUMMARY" : "YOUR FINANCES";
   const currentSpendMonth = getCurrentSpendMonth(new Date(), spendMonthStartDay);
   const currentPeriodLabel = statisticsPeriod === "spend"
     ? selectedOverviewMonth === currentSpendMonth ? "THIS CYCLE" : "SPEND CYCLE"
@@ -2516,6 +2710,63 @@ export default function App() {
     }
   }
 
+  async function createFinanceEvent(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setCreatingEvent(true);
+    setError("");
+    setNotice("");
+    try {
+      const created = await api<FinanceEvent>("/api/events", {
+        method: "POST",
+        body: JSON.stringify({
+          name: eventName,
+          start_date: eventStartDate,
+          end_date: eventEndDate,
+        }),
+      });
+      setEvents((current) => [created, ...current]);
+      setEventName("");
+      setEventFormOpen(false);
+      navigateToEvent(created);
+      setNotice("Event created. Expenses in its date range were added automatically.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create event");
+    } finally {
+      setCreatingEvent(false);
+    }
+  }
+
+  async function setEventExpenseIncluded(item: EventTransaction, included: boolean) {
+    if (!selectedEventID || updatingEventTransactionID) return;
+    setUpdatingEventTransactionID(item.transaction_id);
+    setError("");
+    setNotice("");
+    try {
+      await api(`/api/events/${encodeURIComponent(selectedEventID)}/transactions/${encodeURIComponent(item.transaction_id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ included }),
+      });
+      const updatedTransactions = eventTransactions.map((transaction) =>
+        transaction.transaction_id === item.transaction_id ? { ...transaction, included } : transaction,
+      );
+      setEventTransactions(updatedTransactions);
+      const includedTransactions = updatedTransactions.filter((transaction) => transaction.included);
+      const updatedEvent = selectedEvent ? {
+        ...selectedEvent,
+        transaction_count: includedTransactions.length,
+        total_expenses: includedTransactions.reduce((sum, transaction) => sum + transaction.amount, 0),
+      } : null;
+      if (updatedEvent) {
+        setSelectedEvent(updatedEvent);
+        setEvents((current) => current.map((event) => event.event_id === updatedEvent.event_id ? updatedEvent : event));
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not update event expense");
+    } finally {
+      setUpdatingEventTransactionID(null);
+    }
+  }
+
   async function syncNow() {
     setBusy(true);
     setError("");
@@ -3189,6 +3440,11 @@ export default function App() {
             aria-current={activePage === "statements" ? "page" : undefined}
           ><FileText size={18} /> Statements</button>
           <button
+            className={`nav-item ${activePage === "events" ? "active" : ""}`}
+            onClick={() => navigateToPage("events")}
+            aria-current={activePage === "events" ? "page" : undefined}
+          ><CalendarDays size={18} /> Events</button>
+          <button
             className={`nav-item ${activePage === "projections" ? "active" : ""}`}
             onClick={() => navigateToPage("projections")}
             aria-current={activePage === "projections" ? "page" : undefined}
@@ -3282,6 +3538,14 @@ export default function App() {
             ) : <h1>{pageTitle}</h1>}
           </div>
           <div className="topbar-actions">
+            {activePage === "events" && selectedEventID && (
+              <button type="button" className="secondary-button" onClick={() => navigateToPage("events")}>All events</button>
+            )}
+            {activePage === "events" && !selectedEventID && (
+              <button type="button" className="primary-button" onClick={() => setEventFormOpen((open) => !open)}>
+                <Plus size={16} /> New event
+              </button>
+            )}
             {activePage === "overview" && (
               <button
                 type="button"
@@ -3586,6 +3850,126 @@ export default function App() {
               )}
             </>
           ) : passwordPanel
+        ) : activePage === "events" ? (
+          selectedEventID ? (
+            selectedEvent ? (
+              <>
+                <section className="event-overview panel">
+                  <div>
+                    <span className="eyebrow">EVENT DATES</span>
+                    <strong>{displayDate(selectedEvent.start_date)} – {displayDate(selectedEvent.end_date)}</strong>
+                  </div>
+                  <div>
+                    <span className="eyebrow">INCLUDED EXPENSES</span>
+                    <strong>{selectedEvent.transaction_count}</strong>
+                  </div>
+                  <div>
+                    <span className="eyebrow">EVENT SPENDING</span>
+                    <strong>{money(selectedEvent.total_expenses)}</strong>
+                  </div>
+                </section>
+                <div className="event-chart-grid">
+                  <EventPieChart title="Expenses by category" data={eventCategoryBreakdown} />
+                  <EventPieChart title="Expenses by account" data={eventAccountBreakdown} />
+                </div>
+                <section className="panel event-expenses-panel">
+                  <div className="panel-heading event-expenses-heading">
+                    <div>
+                      <h2>Expenses</h2>
+                      <p>Uncheck expenses that are not part of this event. Search another date range to add expenses from outside the event dates.</p>
+                    </div>
+                  </div>
+                  <div className="event-date-search">
+                    <label>From<input type="date" value={eventSearchFrom} onChange={(e) => setEventSearchFrom(e.target.value)} /></label>
+                    <label>To<input type="date" value={eventSearchTo} min={eventSearchFrom || undefined} onChange={(e) => setEventSearchTo(e.target.value)} /></label>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={!eventSearchFrom && !eventSearchTo}
+                      onClick={() => { setEventSearchFrom(""); setEventSearchTo(""); }}
+                    >Clear search</button>
+                    {(eventSearchFrom === "") !== (eventSearchTo === "") && (
+                      <span className="event-search-help">Choose both dates to search for additional expenses.</span>
+                    )}
+                  </div>
+                  {eventTransactionsLoading ? (
+                    <div className="empty-state">Loading event expenses…</div>
+                  ) : eventTransactions.length === 0 ? (
+                    <div className="empty-state compact">No expenses found for this date range.</div>
+                  ) : (
+                    <div className="event-expense-list">
+                      {eventTransactions.map((item) => (
+                        <article className={`event-expense-row ${item.included ? "included" : ""}`} key={item.transaction_id}>
+                          <div className="event-expense-info">
+                            <strong>{item.merchant_name || item.name}</strong>
+                            <span>{displayDate(item.date)} · {item.category_label || "Uncategorized"} · {item.account_name}</span>
+                          </div>
+                          <strong className="event-expense-amount">{money(item.amount, item.iso_currency_code)}</strong>
+                          <label className="event-expense-toggle">
+                            <input
+                              type="checkbox"
+                              checked={item.included}
+                              disabled={updatingEventTransactionID !== null}
+                              onChange={(e) => void setEventExpenseIncluded(item, e.target.checked)}
+                              aria-label={`${item.included ? "Exclude" : "Include"} ${item.merchant_name || item.name} ${item.included ? "from" : "in"} ${selectedEvent.name}`}
+                            />
+                            <span>{item.included ? "Included" : "Add to event"}</span>
+                          </label>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              </>
+            ) : eventTransactionsLoading ? (
+              <div className="empty-state">Loading event…</div>
+            ) : (
+              <div className="empty-state compact">This event could not be found.</div>
+            )
+          ) : (
+            <>
+              {eventFormOpen && (
+                <section className="panel event-create-panel">
+                  <div className="panel-heading">
+                    <div><h2>Create an event</h2><p>Expenses in the date range will be added automatically, excluding scheduled and subscription payments.</p></div>
+                  </div>
+                  <form className="event-create-form" onSubmit={(e) => void createFinanceEvent(e)}>
+                    <label>Event name<input value={eventName} onChange={(e) => setEventName(e.target.value)} maxLength={100} required placeholder="e.g. Summer trip" /></label>
+                    <label>Start date<input type="date" value={eventStartDate} onChange={(e) => setEventStartDate(e.target.value)} required /></label>
+                    <label>End date<input type="date" value={eventEndDate} min={eventStartDate} onChange={(e) => setEventEndDate(e.target.value)} required /></label>
+                    <div className="event-form-actions">
+                      <button type="button" className="secondary-button" onClick={() => setEventFormOpen(false)} disabled={creatingEvent}>Cancel</button>
+                      <button type="submit" className="primary-button" disabled={creatingEvent}>{creatingEvent ? "Creating…" : "Create event"}</button>
+                    </div>
+                  </form>
+                </section>
+              )}
+              {eventsLoading ? (
+                <div className="empty-state">Loading events…</div>
+              ) : events.length === 0 ? (
+                <section className="panel event-empty-panel">
+                  <span className="empty-icon"><CalendarDays size={22} /></span>
+                  <strong>No events yet</strong>
+                  <span>Create an event to see spending from a trip, celebration, or other date range in one place.</span>
+                  {!eventFormOpen && <button type="button" className="primary-button" onClick={() => setEventFormOpen(true)}><Plus size={16} /> Create your first event</button>}
+                </section>
+              ) : (
+                <div className="event-card-grid">
+                  {events.map((event) => (
+                    <button type="button" className="event-card" key={event.event_id} onClick={() => navigateToEvent(event)}>
+                      <span className="event-card-icon"><CalendarDays size={19} /></span>
+                      <span className="event-card-copy">
+                        <strong>{event.name}</strong>
+                        <span>{displayDate(event.start_date)} – {displayDate(event.end_date)}</span>
+                        <span>{event.transaction_count} included expense{event.transaction_count === 1 ? "" : "s"}</span>
+                      </span>
+                      <strong className="event-card-total">{money(event.total_expenses)}</strong>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          )
         ) : activePage === "statements" ? (
           <>
             {statementAccountViewID ? (
