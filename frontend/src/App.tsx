@@ -224,6 +224,11 @@ type EventTransaction = {
   included: boolean;
 };
 
+type EventTransactionDialogSelection = {
+  dimension: "category" | "account";
+  label: string;
+};
+
 type StatementParser = {
   parser_id: string;
   display_name: string;
@@ -350,7 +355,15 @@ function eventURL(event: FinanceEvent) {
   return `/events/${slug}/${encodeURIComponent(event.event_id)}`;
 }
 
-function EventPieChart({ title, data }: { title: string; data: { label: string; amount: number }[] }) {
+function EventPieChart({
+  title,
+  data,
+  onSelect,
+}: {
+  title: string;
+  data: { label: string; amount: number }[];
+  onSelect: (label: string) => void;
+}) {
   const total = data.reduce((sum, item) => sum + item.amount, 0);
   let startAngle = -Math.PI / 2;
   const slices = data.map((item, index) => {
@@ -371,17 +384,49 @@ function EventPieChart({ title, data }: { title: string; data: { label: string; 
       <div className="panel-heading"><div><h2>{title}</h2><p>{money(total)}</p></div></div>
       {total > 0 ? (
         <div className="event-chart-content">
-          <svg className="event-pie" viewBox="0 0 200 200" role="img" aria-label={`${title}, totaling ${money(total)}`}>
+          <svg className="event-pie" viewBox="0 0 200 200" role="group" aria-label={`${title}, totaling ${money(total)}`}>
             {slices.map((slice) => slice.path
-              ? <path key={slice.label} d={slice.path} fill={slice.color}><title>{slice.label}: {money(slice.amount)}</title></path>
-              : <circle key={slice.label} cx="100" cy="100" r="88" fill={slice.color}><title>{slice.label}: {money(slice.amount)}</title></circle>)}
+              ? <path
+                key={slice.label}
+                d={slice.path}
+                fill={slice.color}
+                role="button"
+                tabIndex={0}
+                aria-label={`Show ${slice.label} transactions`}
+                onClick={() => onSelect(slice.label)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onSelect(slice.label);
+                  }
+                }}
+              ><title>{slice.label}: {money(slice.amount)}</title></path>
+              : <circle
+                key={slice.label}
+                cx="100"
+                cy="100"
+                r="88"
+                fill={slice.color}
+                role="button"
+                tabIndex={0}
+                aria-label={`Show ${slice.label} transactions`}
+                onClick={() => onSelect(slice.label)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onSelect(slice.label);
+                  }
+                }}
+              ><title>{slice.label}: {money(slice.amount)}</title></circle>)}
           </svg>
           <ul className="event-chart-legend">
             {slices.map((slice) => (
               <li key={slice.label}>
-                <span className="liquidity-legend-color" style={{ backgroundColor: slice.color }} />
-                <span className="liquidity-legend-label" title={slice.label}>{slice.label}</span>
-                <strong>{money(slice.amount)}</strong>
+                <button type="button" className="liquidity-category-button" onClick={() => onSelect(slice.label)}>
+                  <span className="liquidity-legend-color" style={{ backgroundColor: slice.color }} />
+                  <span className="liquidity-legend-label" title={slice.label}>{slice.label}</span>
+                  <strong>{money(slice.amount)}</strong>
+                </button>
               </li>
             ))}
           </ul>
@@ -678,6 +723,7 @@ export default function App() {
   const [selectedEventID, setSelectedEventID] = useState<string | null>(() => getEventRoute().eventID);
   const [selectedEvent, setSelectedEvent] = useState<FinanceEvent | null>(null);
   const [eventTransactions, setEventTransactions] = useState<EventTransaction[]>([]);
+  const [eventTransactionDialog, setEventTransactionDialog] = useState<EventTransactionDialogSelection | null>(null);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [eventTransactionsLoading, setEventTransactionsLoading] = useState(false);
   const [eventFormOpen, setEventFormOpen] = useState(false);
@@ -733,6 +779,7 @@ export default function App() {
 
   useEffect(() => {
     const syncPageFromLocation = () => {
+      setEventTransactionDialog(null);
       const eventRoute = getEventRoute();
       if (eventRoute.isEvents) {
         setSelectedEventID(eventRoute.eventID);
@@ -802,7 +849,7 @@ export default function App() {
   }, [monthPickerOpen]);
 
   useEffect(() => {
-    if (!sidebarOpen && !dashboardPreferencesOpen && !transactionFiltersOpen && !projectionAssumptionsOpen && !scheduledExpensesOpen && !pendingCategoryChange && !liquidityTransactionsDialog && !statementUploadOpen && !expandedStatementID) return;
+    if (!sidebarOpen && !dashboardPreferencesOpen && !transactionFiltersOpen && !projectionAssumptionsOpen && !scheduledExpensesOpen && !pendingCategoryChange && !liquidityTransactionsDialog && !eventTransactionDialog && !statementUploadOpen && !expandedStatementID) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setSidebarOpen(false);
@@ -812,6 +859,7 @@ export default function App() {
         setScheduledExpensesOpen(false);
         setPendingCategoryChange(null);
         setLiquidityTransactionsDialog(null);
+        setEventTransactionDialog(null);
         setStatementUploadOpen(false);
         setExpandedStatementID(null);
       }
@@ -823,13 +871,14 @@ export default function App() {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [dashboardPreferencesOpen, expandedStatementID, liquidityTransactionsDialog, pendingCategoryChange, projectionAssumptionsOpen, scheduledExpensesOpen, sidebarOpen, statementUploadOpen, transactionFiltersOpen]);
+  }, [dashboardPreferencesOpen, eventTransactionDialog, expandedStatementID, liquidityTransactionsDialog, pendingCategoryChange, projectionAssumptionsOpen, scheduledExpensesOpen, sidebarOpen, statementUploadOpen, transactionFiltersOpen]);
 
   function navigateToPage(page: "overview" | "accounts" | "administration" | "transactions" | "projections" | "statements" | "events") {
     setActivePage(page);
     setSelectedEventID(null);
     setSelectedEvent(null);
     setEventTransactions([]);
+    setEventTransactionDialog(null);
     setSidebarOpen(false);
     setDashboardPreferencesOpen(false);
     setTransactionFiltersOpen(false);
@@ -847,6 +896,7 @@ export default function App() {
     setSelectedEventID(event.event_id);
     setSelectedEvent(event);
     setEventTransactions([]);
+    setEventTransactionDialog(null);
     setEventSearchFrom("");
     setEventSearchTo("");
     setActivePage("events");
@@ -1370,6 +1420,16 @@ export default function App() {
     });
     return Array.from(totals, ([label, amount]) => ({ label, amount })).sort((left, right) => right.amount - left.amount);
   }, [eventTransactions]);
+  const eventDialogTransactions = useMemo(
+    () => eventTransactionDialog
+      ? eventTransactions.filter((item) => item.included && (
+        eventTransactionDialog.dimension === "category"
+          ? (item.category_label || "Uncategorized") === eventTransactionDialog.label
+          : item.account_name === eventTransactionDialog.label
+      ))
+      : [],
+    [eventTransactionDialog, eventTransactions],
+  );
 
   const pageTitle = activePage === "administration"
     ? "Administration"
@@ -3691,6 +3751,45 @@ export default function App() {
           </div>
         )}
 
+        {eventTransactionDialog && (
+          <div
+            className="liquidity-transactions-backdrop"
+            role="presentation"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setEventTransactionDialog(null);
+            }}
+          >
+            <section className="liquidity-transactions-dialog" role="dialog" aria-modal="true" aria-labelledby="event-transactions-title">
+              <header className="liquidity-transactions-heading">
+                <div>
+                  <h2 id="event-transactions-title">{eventTransactionDialog.label}</h2>
+                  <p>{selectedEvent?.name} · {eventTransactionDialog.dimension} · {eventDialogTransactions.length} transaction{eventDialogTransactions.length === 1 ? "" : "s"} · {money(eventDialogTransactions.reduce((sum, item) => sum + item.amount, 0))}</p>
+                </div>
+                <button type="button" className="preferences-drawer-close" aria-label="Close event transactions" onClick={() => setEventTransactionDialog(null)}>
+                  <X size={18} />
+                </button>
+              </header>
+              <div className="liquidity-transactions-body" aria-live="polite">
+                {eventDialogTransactions.length === 0 ? (
+                  <div className="empty-state compact">No included expenses were found for this chart segment.</div>
+                ) : (
+                  <ul className="liquidity-transactions-list">
+                    {eventDialogTransactions.map((item) => (
+                      <li key={item.transaction_id}>
+                        <div>
+                          <strong>{item.merchant_name || item.name}</strong>
+                          <span>{displayDate(item.date)} · {item.category_label || "Uncategorized"}{item.subcategory_label ? ` / ${item.subcategory_label}` : ""} · {item.account_name}</span>
+                        </div>
+                        <strong>{money(item.amount, item.iso_currency_code)}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </section>
+          </div>
+        )}
+
         {activePage === "administration" ? (
           profile?.role === "admin" ? (
             <>
@@ -3912,8 +4011,16 @@ export default function App() {
                   </div>
                 </section>
                 <div className="event-chart-grid">
-                  <EventPieChart title="Expenses by category" data={eventCategoryBreakdown} />
-                  <EventPieChart title="Expenses by account" data={eventAccountBreakdown} />
+                  <EventPieChart
+                    title="Expenses by category"
+                    data={eventCategoryBreakdown}
+                    onSelect={(label) => setEventTransactionDialog({ dimension: "category", label })}
+                  />
+                  <EventPieChart
+                    title="Expenses by account"
+                    data={eventAccountBreakdown}
+                    onSelect={(label) => setEventTransactionDialog({ dimension: "account", label })}
+                  />
                 </div>
                 <section className="panel event-expenses-panel">
                   <div className="panel-heading event-expenses-heading">
