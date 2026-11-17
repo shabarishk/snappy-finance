@@ -672,7 +672,7 @@ footer { color: #9aa39e; font-size: 10px; padding: 6px 0 16px; }
 .event-pie [role="button"] { cursor: pointer; }
 .event-pie [role="button"]:focus-visible { outline: none; stroke: #172a25; stroke-width: 2px; }
 .event-chart-legend { display: flex; flex: 1; flex-direction: column; gap: 8px; list-style: none; margin: 0; min-width: 0; padding: 0; }
-.event-chart-legend li { align-items: center; display: grid; gap: 6px; grid-template-columns: 8px minmax(0, 1fr) auto; }
+.event-chart-legend li { display: block; }
 .event-chart-legend strong { color: #52615a; font-size: 10px; font-weight: 600; white-space: nowrap; }
 .event-expenses-panel { overflow: hidden; }
 .event-expenses-heading { padding-bottom: 14px; }
