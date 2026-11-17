@@ -221,6 +221,7 @@ type EventTransaction = {
   category_id: string | null;
   category_label: string | null;
   subcategory_label: string | null;
+  pending: boolean;
   included: boolean;
 };
 
@@ -3777,7 +3778,7 @@ export default function App() {
                     {eventDialogTransactions.map((item) => (
                       <li key={item.transaction_id}>
                         <div>
-                          <strong>{item.merchant_name || item.name}</strong>
+                          <strong>{item.merchant_name || item.name}{item.pending && <small className="pending"> Pending</small>}</strong>
                           <span>{displayDate(item.date)} · {item.category_label || "Uncategorized"}{item.subcategory_label ? ` / ${item.subcategory_label}` : ""} · {item.account_name}</span>
                         </div>
                         <strong>{money(item.amount, item.iso_currency_code)}</strong>
@@ -4051,7 +4052,7 @@ export default function App() {
                       {eventTransactions.map((item) => (
                         <article className={`event-expense-row ${item.included ? "included" : ""}`} key={item.transaction_id}>
                           <div className="event-expense-info">
-                            <strong>{item.merchant_name || item.name}</strong>
+                            <strong>{item.merchant_name || item.name}{item.pending && <small className="pending"> Pending</small>}</strong>
                             <span>{displayDate(item.date)} · {item.category_label || "Uncategorized"}{item.subcategory_label ? ` / ${item.subcategory_label}` : ""} · {item.account_name}</span>
                           </div>
                           <strong className="event-expense-amount">{money(item.amount, item.iso_currency_code)}</strong>

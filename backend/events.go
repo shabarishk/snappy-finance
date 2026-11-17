@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net/http"
@@ -32,10 +33,57 @@ type eventTransaction struct {
 	CategoryID       *string `json:"category_id"`
 	CategoryLabel    *string `json:"category_label"`
 	SubcategoryLabel *string `json:"subcategory_label"`
+	Pending          bool    `json:"pending"`
 	Included         bool    `json:"included"`
 }
 
+const insertEventTransactionsSQL = `
+	INSERT INTO event_transactions (event_id, transaction_id)
+	SELECT event.event_id, txn.transaction_id
+	FROM events event
+	JOIN application_transactions txn
+	  ON txn.transaction_date BETWEEN event.start_date AND event.end_date
+	JOIN accounts account ON account.account_id=txn.account_id
+	LEFT JOIN transaction_categories category ON category.category_id=txn.category_id
+	LEFT JOIN transaction_categories parent_category ON parent_category.category_id=category.parent_category_id
+	WHERE ($1='' OR event.event_id=$1)
+	  AND txn.amount > 0
+	  AND txn.hidden_from_users=FALSE
+	  AND NOT account.excluded_from_calculations
+	  AND COALESCE(category.category_type, 'expense')='expense'
+	  AND COALESCE(txn.category_id, '') NOT IN ('transfer', 'transfer_expense')
+	  AND NOT COALESCE(category.excluded_from_totals OR parent_category.excluded_from_totals, FALSE)
+	  AND NOT EXISTS (
+		  SELECT 1 FROM subscription_payment_history history
+		  WHERE history.transaction_id=txn.transaction_id
+	  )
+	  AND NOT EXISTS (
+		  SELECT 1
+		  FROM scheduled_projection_expenses expense
+		  WHERE expense.active
+		    AND (expense.account_id IS NULL OR expense.account_id=txn.account_id)
+		    AND EXISTS (
+			    SELECT 1
+			    FROM unnest(expense.merchant_names || ARRAY[expense.merchant_name, expense.name])
+			        AS scheduled(scheduled_merchant)
+			    WHERE NULLIF(BTRIM(scheduled_merchant), '') IS NOT NULL
+			      AND regexp_replace(lower(scheduled_merchant), '[^a-z0-9]', '', 'g')
+			          = regexp_replace(lower(COALESCE(NULLIF(txn.merchant_name, ''), txn.name)), '[^a-z0-9]', '', 'g')
+		    )
+	  )
+	ON CONFLICT (event_id, transaction_id) DO NOTHING`
+
+func (a *app) ensureEventTransactions(ctx context.Context, eventID string) error {
+	_, err := a.db.Exec(ctx, insertEventTransactionsSQL, eventID)
+	return err
+}
+
 func (a *app) listEvents(w http.ResponseWriter, r *http.Request) {
+	if err := a.ensureEventTransactions(r.Context(), ""); err != nil {
+		log.Printf("include eligible event expenses: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load events")
+		return
+	}
 	rows, err := a.db.Query(r.Context(), `
 		SELECT event.event_id, event.name, event.start_date::text, event.end_date::text,
 			COUNT(txn.transaction_id) FILTER (
@@ -119,41 +167,7 @@ func (a *app) createEvent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not create event")
 		return
 	}
-	_, err = tx.Exec(r.Context(), `
-		INSERT INTO event_transactions (event_id, transaction_id)
-		SELECT $1, txn.transaction_id
-		FROM application_transactions txn
-		JOIN accounts account ON account.account_id=txn.account_id
-		LEFT JOIN transaction_categories category ON category.category_id=txn.category_id
-		LEFT JOIN transaction_categories parent_category ON parent_category.category_id=category.parent_category_id
-		WHERE txn.transaction_date BETWEEN $2 AND $3
-		  AND txn.amount > 0
-		  AND txn.pending=FALSE
-		  AND txn.hidden_from_users=FALSE
-		  AND NOT account.excluded_from_calculations
-		  AND COALESCE(category.category_type, 'expense')='expense'
-		  AND COALESCE(txn.category_id, '') NOT IN ('transfer', 'transfer_expense')
-		  AND NOT COALESCE(category.excluded_from_totals OR parent_category.excluded_from_totals, FALSE)
-		  AND NOT EXISTS (
-			  SELECT 1 FROM subscription_payment_history history
-			  WHERE history.transaction_id=txn.transaction_id
-		  )
-		  AND NOT EXISTS (
-			  SELECT 1
-			  FROM scheduled_projection_expenses expense
-			  WHERE expense.active
-			    AND (expense.account_id IS NULL OR expense.account_id=txn.account_id)
-			    AND EXISTS (
-				    SELECT 1
-				    FROM unnest(expense.merchant_names || ARRAY[expense.merchant_name, expense.name])
-				        AS scheduled(scheduled_merchant)
-				    WHERE NULLIF(BTRIM(scheduled_merchant), '') IS NOT NULL
-				      AND regexp_replace(lower(scheduled_merchant), '[^a-z0-9]', '', 'g')
-				          = regexp_replace(lower(COALESCE(NULLIF(txn.merchant_name, ''), txn.name)), '[^a-z0-9]', '', 'g')
-			    )
-		  )
-		ON CONFLICT (event_id, transaction_id) DO NOTHING`,
-		event.EventID, startDate, endDate)
+	_, err = tx.Exec(r.Context(), insertEventTransactionsSQL, event.EventID)
 	if err != nil {
 		log.Printf("select event expenses: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not create event")
@@ -179,6 +193,11 @@ func (a *app) createEvent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) getEvent(w http.ResponseWriter, r *http.Request) {
+	if err := a.ensureEventTransactions(r.Context(), r.PathValue("eventID")); err != nil {
+		log.Printf("include eligible event expenses: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load event")
+		return
+	}
 	event, err := a.readEvent(r, r.PathValue("eventID"))
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "event not found")
@@ -214,6 +233,11 @@ func (a *app) readEvent(r *http.Request, eventID string) (financeEvent, error) {
 
 func (a *app) listEventTransactions(w http.ResponseWriter, r *http.Request) {
 	eventID := r.PathValue("eventID")
+	if err := a.ensureEventTransactions(r.Context(), eventID); err != nil {
+		log.Printf("include eligible event expenses: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not load event transactions")
+		return
+	}
 	event, err := a.readEvent(r, eventID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "event not found")
@@ -240,7 +264,7 @@ func (a *app) listEventTransactions(w http.ResponseWriter, r *http.Request) {
 			txn.name, txn.merchant_name, txn.amount, txn.transaction_date::text,
 			txn.iso_currency_code, txn.category_id, COALESCE(parent_category.label, category.label),
 			CASE WHEN category.parent_category_id IS NOT NULL THEN category.label END,
-			COALESCE(membership.included, FALSE)
+			txn.pending, COALESCE(membership.included, FALSE)
 		FROM application_transactions txn
 		JOIN accounts account ON account.account_id=txn.account_id
 		LEFT JOIN transaction_categories category ON category.category_id=txn.category_id
@@ -248,7 +272,6 @@ func (a *app) listEventTransactions(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN event_transactions membership
 		  ON membership.event_id=$1 AND membership.transaction_id=txn.transaction_id
 		WHERE txn.amount > 0
-		  AND txn.pending=FALSE
 		  AND COALESCE(category.category_type, 'expense')='expense'
 		  AND COALESCE(txn.category_id, '') NOT IN ('transfer', 'transfer_expense')
 		  AND ($2 OR NOT txn.hidden_from_users)
@@ -266,7 +289,7 @@ func (a *app) listEventTransactions(w http.ResponseWriter, r *http.Request) {
 		var item eventTransaction
 		if err := rows.Scan(&item.TransactionID, &item.AccountID, &item.AccountName, &item.Name,
 			&item.MerchantName, &item.Amount, &item.Date, &item.Currency, &item.CategoryID,
-			&item.CategoryLabel, &item.SubcategoryLabel, &item.Included); err != nil {
+			&item.CategoryLabel, &item.SubcategoryLabel, &item.Pending, &item.Included); err != nil {
 			log.Printf("scan event transaction: %v", err)
 			writeError(w, http.StatusInternalServerError, "could not load event transactions")
 			return
@@ -297,7 +320,7 @@ func (a *app) setEventTransactionIncluded(w http.ResponseWriter, r *http.Request
 			FROM events event
 			JOIN application_transactions txn ON txn.transaction_id=$2
 			LEFT JOIN transaction_categories category ON category.category_id=txn.category_id
-			WHERE event.event_id=$1 AND txn.amount > 0 AND txn.pending=FALSE
+			WHERE event.event_id=$1 AND txn.amount > 0
 			  AND COALESCE(category.category_type, 'expense')='expense'
 			  AND COALESCE(txn.category_id, '') NOT IN ('transfer', 'transfer_expense')
 			  AND ($3 OR NOT txn.hidden_from_users)
