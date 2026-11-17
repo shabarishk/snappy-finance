@@ -626,9 +626,12 @@ func (a *app) updateTransactionVisibility(w http.ResponseWriter, r *http.Request
 
 func (a *app) listTransactionCategories(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.db.Query(r.Context(), `
-		SELECT category_id, label, category_type, excluded_from_totals
-		FROM transaction_categories
-		ORDER BY label`)
+		SELECT category.category_id, category.label, category.category_type,
+			category.excluded_from_totals, category.parent_category_id
+		FROM transaction_categories category
+		LEFT JOIN transaction_categories parent ON parent.category_id=category.parent_category_id
+		ORDER BY COALESCE(parent.label, category.label),
+			(category.parent_category_id IS NOT NULL), category.label`)
 	if err != nil {
 		log.Printf("query transaction categories: %v", err)
 		writeError(w, http.StatusInternalServerError, "could not load transaction categories")
@@ -638,7 +641,8 @@ func (a *app) listTransactionCategories(w http.ResponseWriter, r *http.Request) 
 	categories := make([]transactionCategory, 0)
 	for rows.Next() {
 		var category transactionCategory
-		if err := rows.Scan(&category.CategoryID, &category.Label, &category.CategoryType, &category.ExcludedFromTotals); err != nil {
+		if err := rows.Scan(&category.CategoryID, &category.Label, &category.CategoryType,
+			&category.ExcludedFromTotals, &category.ParentCategoryID); err != nil {
 			log.Printf("scan transaction category: %v", err)
 			writeError(w, http.StatusInternalServerError, "could not load transaction categories")
 			return
@@ -1300,10 +1304,11 @@ type transaction struct {
 }
 
 type transactionCategory struct {
-	CategoryID         string `json:"category_id"`
-	Label              string `json:"label"`
-	CategoryType       string `json:"category_type"`
-	ExcludedFromTotals bool   `json:"excluded_from_totals"`
+	CategoryID         string  `json:"category_id"`
+	Label              string  `json:"label"`
+	CategoryType       string  `json:"category_type"`
+	ExcludedFromTotals bool    `json:"excluded_from_totals"`
+	ParentCategoryID   *string `json:"parent_category_id"`
 }
 
 func encrypt(key []byte, plaintext string) ([]byte, error) {

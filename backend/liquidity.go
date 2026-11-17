@@ -75,18 +75,26 @@ func (a *app) getDashboardLiquidityTransactions(w http.ResponseWriter, r *http.R
 		SELECT txn.transaction_id, txn.name, txn.merchant_name, txn.transaction_date::text,
 			txn.amount, COALESCE(account.official_name, account.name), txn.iso_currency_code,
 			account.type, cycle.statement_close_day, cycle.statement_due_day,
-			category.label, txn.category_detailed, txn.category_primary
+			COALESCE(parent_category.label, category.label), txn.category_detailed, txn.category_primary
 		FROM application_transactions txn
 		JOIN accounts account USING (account_id)
 		LEFT JOIN credit_card_cycles cycle USING (account_id)
 		LEFT JOIN transaction_categories category ON category.category_id = txn.category_id
+		LEFT JOIN transaction_categories parent_category ON parent_category.category_id = category.parent_category_id
 		WHERE txn.amount > 0
 		  AND account.type IN ('depository', 'credit')
 		  AND account.excluded_from_calculations=FALSE
 		  AND ($1 OR NOT txn.hidden_from_users)
-		  AND NOT COALESCE(txn.category_id = ANY($2::text[]), FALSE)
+		  AND NOT COALESCE(
+			  txn.category_id = ANY($2::text[]) OR category.parent_category_id = ANY($2::text[]),
+			  FALSE
+		  )
 		  AND NOT COALESCE(txn.transaction_id = ANY($3::text[]), FALSE)
-		  AND NOT COALESCE(category.category_type = 'expense' AND category.excluded_from_totals, FALSE)
+		  AND NOT COALESCE(
+			  category.category_type = 'expense'
+			  AND (category.excluded_from_totals OR parent_category.excluded_from_totals),
+			  FALSE
+		  )
 		ORDER BY txn.transaction_date DESC, txn.transaction_id`,
 		user.Role == "admin", preferences.ExcludedSpendCategories, preferences.ExcludedLiquidityTransactions)
 	if err != nil {
@@ -228,18 +236,26 @@ func (a *app) getDashboardLiquidity(w http.ResponseWriter, r *http.Request) {
 	rows, err = a.db.Query(r.Context(), `
 		SELECT txn.transaction_date::text, txn.amount, account.type,
 			cycle.statement_close_day, cycle.statement_due_day,
-			category.label, txn.category_detailed, txn.category_primary
+			COALESCE(parent_category.label, category.label), txn.category_detailed, txn.category_primary
 		FROM application_transactions txn
 		JOIN accounts account USING (account_id)
 		LEFT JOIN credit_card_cycles cycle USING (account_id)
 		LEFT JOIN transaction_categories category ON category.category_id = txn.category_id
+		LEFT JOIN transaction_categories parent_category ON parent_category.category_id = category.parent_category_id
 		WHERE txn.amount > 0
 		  AND account.type IN ('depository', 'credit')
 		  AND account.excluded_from_calculations=FALSE
 		  AND ($1 OR NOT txn.hidden_from_users)
-		  AND NOT COALESCE(txn.category_id = ANY($2::text[]), FALSE)
+		  AND NOT COALESCE(
+			  txn.category_id = ANY($2::text[]) OR category.parent_category_id = ANY($2::text[]),
+			  FALSE
+		  )
 		  AND NOT COALESCE(txn.transaction_id = ANY($3::text[]), FALSE)
-		  AND NOT COALESCE(category.category_type = 'expense' AND category.excluded_from_totals, FALSE)`,
+		  AND NOT COALESCE(
+			  category.category_type = 'expense'
+			  AND (category.excluded_from_totals OR parent_category.excluded_from_totals),
+			  FALSE
+		  )`,
 		isAdmin, preferences.ExcludedSpendCategories, preferences.ExcludedLiquidityTransactions)
 	if err != nil {
 		log.Printf("query dashboard liquidity transactions: %v", err)

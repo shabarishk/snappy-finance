@@ -21,17 +21,18 @@ type financeEvent struct {
 }
 
 type eventTransaction struct {
-	TransactionID string  `json:"transaction_id"`
-	AccountID     string  `json:"account_id"`
-	AccountName   string  `json:"account_name"`
-	Name          string  `json:"name"`
-	MerchantName  *string `json:"merchant_name"`
-	Amount        float64 `json:"amount"`
-	Date          string  `json:"date"`
-	Currency      *string `json:"iso_currency_code"`
-	CategoryID    *string `json:"category_id"`
-	CategoryLabel *string `json:"category_label"`
-	Included      bool    `json:"included"`
+	TransactionID    string  `json:"transaction_id"`
+	AccountID        string  `json:"account_id"`
+	AccountName      string  `json:"account_name"`
+	Name             string  `json:"name"`
+	MerchantName     *string `json:"merchant_name"`
+	Amount           float64 `json:"amount"`
+	Date             string  `json:"date"`
+	Currency         *string `json:"iso_currency_code"`
+	CategoryID       *string `json:"category_id"`
+	CategoryLabel    *string `json:"category_label"`
+	SubcategoryLabel *string `json:"subcategory_label"`
+	Included         bool    `json:"included"`
 }
 
 func (a *app) listEvents(w http.ResponseWriter, r *http.Request) {
@@ -124,6 +125,7 @@ func (a *app) createEvent(w http.ResponseWriter, r *http.Request) {
 		FROM application_transactions txn
 		JOIN accounts account ON account.account_id=txn.account_id
 		LEFT JOIN transaction_categories category ON category.category_id=txn.category_id
+		LEFT JOIN transaction_categories parent_category ON parent_category.category_id=category.parent_category_id
 		WHERE txn.transaction_date BETWEEN $2 AND $3
 		  AND txn.amount > 0
 		  AND txn.pending=FALSE
@@ -131,7 +133,7 @@ func (a *app) createEvent(w http.ResponseWriter, r *http.Request) {
 		  AND NOT account.excluded_from_calculations
 		  AND COALESCE(category.category_type, 'expense')='expense'
 		  AND COALESCE(txn.category_id, '') NOT IN ('transfer', 'transfer_expense')
-		  AND NOT COALESCE(category.excluded_from_totals, FALSE)
+		  AND NOT COALESCE(category.excluded_from_totals OR parent_category.excluded_from_totals, FALSE)
 		  AND NOT EXISTS (
 			  SELECT 1 FROM subscription_payment_history history
 			  WHERE history.transaction_id=txn.transaction_id
@@ -236,11 +238,13 @@ func (a *app) listEventTransactions(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.db.Query(r.Context(), `
 		SELECT txn.transaction_id, txn.account_id, COALESCE(account.official_name, account.name),
 			txn.name, txn.merchant_name, txn.amount, txn.transaction_date::text,
-			txn.iso_currency_code, txn.category_id, category.label,
+			txn.iso_currency_code, txn.category_id, COALESCE(parent_category.label, category.label),
+			CASE WHEN category.parent_category_id IS NOT NULL THEN category.label END,
 			COALESCE(membership.included, FALSE)
 		FROM application_transactions txn
 		JOIN accounts account ON account.account_id=txn.account_id
 		LEFT JOIN transaction_categories category ON category.category_id=txn.category_id
+		LEFT JOIN transaction_categories parent_category ON parent_category.category_id=category.parent_category_id
 		LEFT JOIN event_transactions membership
 		  ON membership.event_id=$1 AND membership.transaction_id=txn.transaction_id
 		WHERE txn.amount > 0
@@ -262,7 +266,7 @@ func (a *app) listEventTransactions(w http.ResponseWriter, r *http.Request) {
 		var item eventTransaction
 		if err := rows.Scan(&item.TransactionID, &item.AccountID, &item.AccountName, &item.Name,
 			&item.MerchantName, &item.Amount, &item.Date, &item.Currency, &item.CategoryID,
-			&item.CategoryLabel, &item.Included); err != nil {
+			&item.CategoryLabel, &item.SubcategoryLabel, &item.Included); err != nil {
 			log.Printf("scan event transaction: %v", err)
 			writeError(w, http.StatusInternalServerError, "could not load event transactions")
 			return

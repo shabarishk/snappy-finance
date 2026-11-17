@@ -220,6 +220,7 @@ type EventTransaction = {
   iso_currency_code: string | null;
   category_id: string | null;
   category_label: string | null;
+  subcategory_label: string | null;
   included: boolean;
 };
 
@@ -292,6 +293,7 @@ type TransactionCategory = {
   label: string;
   category_type: "income" | "expense";
   excluded_from_totals: boolean;
+  parent_category_id: string | null;
 };
 
 type LiquidityCategory = {
@@ -1130,20 +1132,45 @@ export default function App() {
     1,
   );
   const displayedMonthName = displayedMonth.toLocaleDateString(undefined, { month: "long" });
+  const categoriesByID = useMemo(
+    () => new Map(transactionCategories.map((category) => [category.category_id, category])),
+    [transactionCategories],
+  );
+  const orderedTransactionCategories = useMemo(
+    () => [...transactionCategories].sort((left, right) => {
+      const leftParent = left.parent_category_id ? categoriesByID.get(left.parent_category_id)?.label ?? "" : left.label;
+      const rightParent = right.parent_category_id ? categoriesByID.get(right.parent_category_id)?.label ?? "" : right.label;
+      return leftParent.localeCompare(rightParent) ||
+        Number(Boolean(left.parent_category_id)) - Number(Boolean(right.parent_category_id)) ||
+        left.label.localeCompare(right.label);
+    }),
+    [categoriesByID, transactionCategories],
+  );
+  const categoryDisplayLabel = (category: TransactionCategory) => {
+    const parent = category.parent_category_id ? categoriesByID.get(category.parent_category_id) : undefined;
+    return parent ? `${parent.label} / ${category.label}` : category.label;
+  };
+  const transactionCategoryLabel = (categoryID: string | null) => {
+    const category = categoryID ? categoriesByID.get(categoryID) : undefined;
+    return category ? categoryDisplayLabel(category) : undefined;
+  };
   const excludedAccountIDs = useMemo(
     () => new Set(accounts.filter((account) => account.excluded_from_calculations).map((account) => account.account_id)),
     [accounts],
   );
 
   const totals = useMemo(() => {
-    const categoriesByID = new Map(transactionCategories.map((category) => [category.category_id, category]));
     const current = transactions.filter(
       (item) => {
         if (excludedAccountIDs.has(item.account_id)) return false;
         if (item.date < statisticsRange.start || item.date > statisticsRange.end) return false;
         const category = item.category_id ? categoriesByID.get(item.category_id) : undefined;
+        const parentCategory = category?.parent_category_id
+          ? categoriesByID.get(category.parent_category_id)
+          : undefined;
         const transactionType = item.amount < 0 ? "income" : "expense";
-        return !(category?.category_type === transactionType && category.excluded_from_totals);
+        return !(category?.category_type === transactionType &&
+          (category.excluded_from_totals || parentCategory?.excluded_from_totals));
       },
     );
     const spent = current.filter((item) => item.amount > 0).reduce((sum, item) => sum + item.amount, 0);
@@ -1152,7 +1179,7 @@ export default function App() {
       .filter((item) => item.amount < 0 && item.category_id === "expendable_income")
       .reduce((sum, item) => sum + Math.abs(item.amount), 0);
     return { spent, income, expendableIncome, net: income - spent };
-  }, [excludedAccountIDs, transactions, transactionCategories, statisticsRange]);
+  }, [categoriesByID, excludedAccountIDs, transactions, statisticsRange]);
 
   const accountConnections = useMemo(() => {
     const accountsByConnection = new Map<string, Account[]>();
@@ -1259,13 +1286,19 @@ export default function App() {
         ? !["depository", "credit", "loan"].includes(type)
         : type === activeTransactionTab;
       const matchesAccount = selectedTransactionAccountIDs === null || selectedTransactionAccountIDs.includes(item.account_id);
+      const itemCategory = item.category_id ? categoriesByID.get(item.category_id) : undefined;
       const matchesCategory = showOnlyUncategorizedTransactions
         ? item.category_id === null
         : selectedExpenseCategoryIDs.length === 0 ||
-          (item.amount > 0 && item.category_id !== null && selectedExpenseCategoryIDs.includes(item.category_id));
+          (item.amount > 0 && item.category_id !== null && (
+            selectedExpenseCategoryIDs.includes(item.category_id) ||
+            (itemCategory?.parent_category_id !== null &&
+              itemCategory?.parent_category_id !== undefined &&
+              selectedExpenseCategoryIDs.includes(itemCategory.parent_category_id))
+          ));
       return matchesType && matchesAccount && matchesCategory;
     });
-  }, [accountsByID, activeTransactionTab, selectedExpenseCategoryIDs, selectedTransactionAccountIDs, showOnlyUncategorizedTransactions, transactionRecords]);
+  }, [accountsByID, activeTransactionTab, categoriesByID, selectedExpenseCategoryIDs, selectedTransactionAccountIDs, showOnlyUncategorizedTransactions, transactionRecords]);
   const transactionTotals = useMemo(() => {
     const totalsByCurrency = new Map<string, { moneyIn: number; moneyOut: number }>();
     visibleTransactions.forEach((item) => {
@@ -1756,7 +1789,8 @@ export default function App() {
           : transaction,
       ) ?? null);
       setMetricsRefreshKey((current) => current + 1);
-      const label = transactionCategories.find((category) => category.category_id === categoryID)?.label;
+      const selectedCategory = categoriesByID.get(categoryID);
+      const label = selectedCategory ? categoryDisplayLabel(selectedCategory) : undefined;
       if (item.is_statement_import && categoryID && scope === "related" && result.matching_rule_applied) {
         const count = result.matched_transaction_ids.length;
         setNotice(`Applied ${label ?? "Other"} to ${count} matching Plaid and statement transaction${count === 1 ? "" : "s"}. Future matches will use this category.`);
@@ -1796,9 +1830,10 @@ export default function App() {
           : item,
       ));
       const totalName = category.category_type === "income" ? "income" : "spending";
+      const label = categoryDisplayLabel(category);
       setNotice(excluded
-        ? `${category.label} transactions excluded from ${totalName} for all profiles.`
-        : `${category.label} transactions included in ${totalName} for all profiles.`);
+        ? `${label} transactions excluded from ${totalName} for all profiles.`
+        : `${label} transactions included in ${totalName} for all profiles.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not update category settings");
     }
@@ -2159,7 +2194,7 @@ export default function App() {
               {pageTransactions.map((item) => (
                 <div className={`transaction-row ${item.hidden_from_users ? "hidden-transaction" : ""}`} key={item.transaction_id}>
                   <span className={`transaction-icon ${item.amount < 0 ? "income-icon" : ""}`}>{item.amount < 0 ? <ArrowDownLeft size={17} /> : <ArrowUpRight size={17} />}</span>
-                  <div className="transaction-info"><strong>{item.merchant_name || item.name}</strong><span>{transactionCategories.find((category) => category.category_id === item.category_id)?.label || item.category_detailed || item.category_primary || "Uncategorized"} · {new Date(`${item.date}T12:00:00`).toLocaleDateString()} · {accountsByID.get(item.account_id)?.official_name || accountsByID.get(item.account_id)?.name || "Unknown account"}{item.is_statement_import ? " · Statement history" : ""}</span></div>
+                  <div className="transaction-info"><strong>{item.merchant_name || item.name}</strong><span>{transactionCategoryLabel(item.category_id) || item.category_detailed || item.category_primary || "Uncategorized"} · {new Date(`${item.date}T12:00:00`).toLocaleDateString()} · {accountsByID.get(item.account_id)?.official_name || accountsByID.get(item.account_id)?.name || "Unknown account"}{item.is_statement_import ? " · Statement history" : ""}</span></div>
                   <strong className={item.amount < 0 ? "positive-text" : ""}>{item.amount < 0 ? "+" : "−"}{money(Math.abs(item.amount), item.iso_currency_code)}{item.pending && <small className="pending"> Pending</small>}</strong>
                   {(item.is_statement_import
                     ? profile?.role === "admin"
@@ -2183,8 +2218,8 @@ export default function App() {
                           onChange={(event) => requestTransactionCategoryChange(item, event.target.value)}
                         >
                           <option value="">{item.is_statement_import ? "Uncategorized" : "Bank category"}</option>
-                          {transactionCategories.filter((category) => category.category_type === (item.amount < 0 ? "income" : "expense")).map((category) => (
-                            <option key={category.category_id} value={category.category_id}>{category.label}</option>
+                          {orderedTransactionCategories.filter((category) => category.category_type === (item.amount < 0 ? "income" : "expense")).map((category) => (
+                            <option key={category.category_id} value={category.category_id}>{categoryDisplayLabel(category)}</option>
                           ))}
                         </select>
                         {!item.is_statement_import && (
@@ -3601,7 +3636,7 @@ export default function App() {
             <section className="category-scope-dialog" role="dialog" aria-modal="true" aria-labelledby="category-scope-title">
               <h2 id="category-scope-title">Apply category change</h2>
               <p>
-                Apply <strong>{transactionCategories.find((category) => category.category_id === pendingCategoryChange.categoryID)?.label ?? "this category"}</strong> to <strong>{pendingCategoryChange.item.merchant_name || pendingCategoryChange.item.name}</strong>:
+                Apply <strong>{transactionCategoryLabel(pendingCategoryChange.categoryID) ?? "this category"}</strong> to <strong>{pendingCategoryChange.item.merchant_name || pendingCategoryChange.item.name}</strong>:
               </p>
               <div className="category-scope-actions">
                 <button className="secondary-button" type="button" onClick={() => setPendingCategoryChange(null)}>Cancel</button>
@@ -3831,16 +3866,24 @@ export default function App() {
                         <section className="category-exclusion-group" key={categoryType}>
                           <h3>{categoryType === "expense" ? "Spending" : "Income"}</h3>
                           <div className="preference-list">
-                            {transactionCategories.filter((category) => category.category_type === categoryType).map((category) => (
-                              <label className="preference-option" key={category.category_id}>
-                                <input
-                                  type="checkbox"
-                                  checked={category.excluded_from_totals}
-                                  onChange={(event) => void setCategoryExcluded(category, event.target.checked)}
-                                />
-                                Exclude {category.label} from {categoryType === "expense" ? "spending" : "income"}
-                              </label>
-                            ))}
+                            {orderedTransactionCategories
+                              .filter((category) => category.category_type === categoryType)
+                              .map((category) => {
+                                const parentExcluded = category.parent_category_id
+                                  ? categoriesByID.get(category.parent_category_id)?.excluded_from_totals ?? false
+                                  : false;
+                                return (
+                                  <label className="preference-option" key={category.category_id}>
+                                    <input
+                                      type="checkbox"
+                                      checked={category.excluded_from_totals || parentExcluded}
+                                      disabled={parentExcluded}
+                                      onChange={(event) => void setCategoryExcluded(category, event.target.checked)}
+                                    />
+                                    Exclude {categoryDisplayLabel(category)} from {categoryType === "expense" ? "spending" : "income"}
+                                  </label>
+                                );
+                              })}
                           </div>
                         </section>
                       ))}
@@ -3902,7 +3945,7 @@ export default function App() {
                         <article className={`event-expense-row ${item.included ? "included" : ""}`} key={item.transaction_id}>
                           <div className="event-expense-info">
                             <strong>{item.merchant_name || item.name}</strong>
-                            <span>{displayDate(item.date)} · {item.category_label || "Uncategorized"} · {item.account_name}</span>
+                            <span>{displayDate(item.date)} · {item.category_label || "Uncategorized"}{item.subcategory_label ? ` / ${item.subcategory_label}` : ""} · {item.account_name}</span>
                           </div>
                           <strong className="event-expense-amount">{money(item.amount, item.iso_currency_code)}</strong>
                           <label className="event-expense-toggle">
@@ -4048,14 +4091,14 @@ export default function App() {
                     }}
                     disabled={selectedExpenseCategoryIDs.length === 0}
                   >Clear category selection</button>
-                  {transactionCategories.filter((category) => category.category_type === "expense").map((category) => (
+                  {orderedTransactionCategories.filter((category) => category.category_type === "expense").map((category) => (
                     <label className="preference-option" key={category.category_id}>
                       <input
                         type="checkbox"
                         checked={selectedExpenseCategoryIDs.includes(category.category_id)}
                         onChange={(event) => updateExpenseCategorySelection(category.category_id, event.target.checked)}
                       />
-                      {category.label}
+                      {categoryDisplayLabel(category)}
                     </label>
                   ))}
                 </div>
@@ -4161,14 +4204,18 @@ export default function App() {
                 <div className="preference-list liquidity-category-preferences">
                   <strong className="preference-list-heading">Include spending categories in liquidity charts</strong>
                   <p>These choices affect your liquidity charts and forecasts only. Categories excluded by the administrator remain excluded for everyone.</p>
-                  {transactionCategories.filter((category) => category.category_type === "expense").map((category) => (
+                  {orderedTransactionCategories.filter((category) => category.category_type === "expense").map((category) => (
                     <label className="preference-option" key={category.category_id}>
                       <input
                         type="checkbox"
-                        checked={!excludedSpendCategories.includes(category.category_id)}
+                        checked={
+                          !excludedSpendCategories.includes(category.category_id) &&
+                          !(category.parent_category_id && excludedSpendCategories.includes(category.parent_category_id))
+                        }
+                        disabled={Boolean(category.parent_category_id && excludedSpendCategories.includes(category.parent_category_id))}
                         onChange={(event) => void saveLiquidityCategory(category.category_id, !event.target.checked)}
                       />
-                      {category.label}
+                      {categoryDisplayLabel(category)}
                     </label>
                   ))}
                 </div>

@@ -195,10 +195,15 @@ CREATE TABLE IF NOT EXISTS transaction_categories (
     category_id TEXT PRIMARY KEY,
     label TEXT NOT NULL,
     category_type TEXT NOT NULL DEFAULT 'expense',
-    excluded_from_totals BOOLEAN NOT NULL DEFAULT FALSE
+    excluded_from_totals BOOLEAN NOT NULL DEFAULT FALSE,
+    parent_category_id TEXT REFERENCES transaction_categories(category_id) ON DELETE SET NULL
 );
 
 ALTER TABLE transaction_categories ADD COLUMN IF NOT EXISTS category_type TEXT NOT NULL DEFAULT 'expense';
+ALTER TABLE transaction_categories
+    ADD COLUMN IF NOT EXISTS parent_category_id TEXT REFERENCES transaction_categories(category_id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS transaction_categories_parent_category_idx
+    ON transaction_categories (parent_category_id);
 
 INSERT INTO transaction_categories (category_id, label, category_type) VALUES
     ('credit_card_payment', 'Credit card payment', 'expense'),
@@ -224,8 +229,48 @@ INSERT INTO transaction_categories (category_id, label, category_type) VALUES
 ON CONFLICT (category_id) DO NOTHING;
 
 UPDATE transaction_categories
-SET label = 'Subscriptions/Streaming'
-WHERE category_id = 'streaming' AND label IS DISTINCT FROM 'Subscriptions/Streaming';
+SET label = CASE category_id
+    WHEN 'streaming' THEN 'Subscriptions'
+    WHEN 'transportation_mobility' THEN 'Transportation'
+    WHEN 'recreation_activities' THEN 'Recreation'
+    ELSE label
+END
+WHERE category_id IN ('streaming', 'transportation_mobility', 'recreation_activities');
+
+INSERT INTO transaction_categories (category_id, label, category_type, parent_category_id) VALUES
+    ('food_delivery', 'Food delivery', 'expense', 'restaurants'),
+    ('restaurant_dine_in', 'Dine-in', 'expense', 'restaurants'),
+    ('restaurant_takeout', 'Takeout', 'expense', 'restaurants'),
+    ('restaurant_coffee', 'Coffee', 'expense', 'restaurants'),
+    ('subscription_streaming', 'Streaming', 'expense', 'streaming'),
+    ('subscription_apps_software', 'Apps/SW', 'expense', 'streaming'),
+    ('subscription_membership', 'Membership', 'expense', 'streaming'),
+    ('grocery_supermarket', 'Supermarket', 'expense', 'grocery'),
+    ('grocery_convenience', 'Convenience', 'expense', 'grocery'),
+    ('grocery_liquor', 'Liquor', 'expense', 'grocery'),
+    ('transportation_fuel', 'Fuel', 'expense', 'transportation_mobility'),
+    ('transportation_charging', 'Charging', 'expense', 'transportation_mobility'),
+    ('transportation_parking', 'Parking', 'expense', 'transportation_mobility'),
+    ('transportation_other', 'Other', 'expense', 'transportation_mobility'),
+    ('shopping_clothing', 'Clothing', 'expense', 'shopping'),
+    ('shopping_household', 'Household', 'expense', 'shopping'),
+    ('shopping_electronics', 'Electronics', 'expense', 'shopping'),
+    ('shopping_personal_care', 'Personal care', 'expense', 'shopping'),
+    ('home_repairs', 'Repairs', 'expense', 'home_maintenance'),
+    ('home_maintenance_tasks', 'Maintenance', 'expense', 'home_maintenance'),
+    ('home_supplies', 'Supplies', 'expense', 'home_maintenance'),
+    ('home_services', 'Services', 'expense', 'home_maintenance'),
+    ('home_cleaning', 'Cleaning', 'expense', 'home_maintenance'),
+    ('recreation_movies', 'Movies', 'expense', 'recreation_activities'),
+    ('recreation_concerts', 'Concerts', 'expense', 'recreation_activities'),
+    ('recreation_sports', 'Sports', 'expense', 'recreation_activities'),
+    ('recreation_hobbies', 'Hobbies', 'expense', 'recreation_activities'),
+    ('recreation_travel', 'Travel', 'expense', 'recreation_activities'),
+    ('recreation_activities_general', 'Activities', 'expense', 'recreation_activities')
+ON CONFLICT (category_id) DO UPDATE
+SET label = EXCLUDED.label,
+    category_type = EXCLUDED.category_type,
+    parent_category_id = EXCLUDED.parent_category_id;
 
 CREATE TABLE IF NOT EXISTS app_schema_migrations (
     migration_id TEXT PRIMARY KEY,
@@ -288,11 +333,11 @@ LANGUAGE SQL
 IMMUTABLE
 AS $$
     SELECT CASE
+        WHEN p_category_detailed = 'FOOD_AND_DRINK_COFFEE' THEN 'restaurant_coffee'
         WHEN p_category_detailed IN (
             'FOOD_AND_DRINK_OTHER_FOOD_AND_DRINK',
             'FOOD_AND_DRINK_FAST_FOOD',
-            'FOOD_AND_DRINK_RESTAURANT',
-            'FOOD_AND_DRINK_COFFEE'
+            'FOOD_AND_DRINK_RESTAURANT'
         ) THEN 'restaurants'
         WHEN p_category_detailed IN (
             'TRANSFER_IN_ACCOUNT_TRANSFER',
@@ -454,6 +499,83 @@ CREATE TABLE IF NOT EXISTS transaction_category_rules (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (category_type, match_key)
 );
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM app_schema_migrations
+        WHERE migration_id = 'secondary-expense-categories-v1'
+    ) THEN
+        UPDATE transaction_categories
+        SET excluded_from_totals = TRUE
+        WHERE category_id = 'subscription_streaming'
+          AND EXISTS (
+              SELECT 1
+              FROM transaction_categories parent
+              WHERE parent.category_id = 'streaming'
+                AND parent.excluded_from_totals = TRUE
+          );
+
+        UPDATE transaction_categories
+        SET excluded_from_totals = FALSE
+        WHERE category_id = 'streaming'
+          AND excluded_from_totals = TRUE;
+
+        UPDATE users user_row
+        SET dashboard_preferences = jsonb_set(
+            user_row.dashboard_preferences,
+            '{excluded_spend_categories}',
+            (
+                SELECT COALESCE(
+                    jsonb_agg(DISTINCT to_jsonb(
+                        CASE WHEN category.value = 'streaming'
+                            THEN 'subscription_streaming'
+                            ELSE category.value
+                        END
+                    )),
+                    '[]'::jsonb
+                )
+                FROM jsonb_array_elements_text(
+                    COALESCE(user_row.dashboard_preferences->'excluded_spend_categories', '[]'::jsonb)
+                ) AS category(value)
+            )
+        )
+        WHERE COALESCE(user_row.dashboard_preferences->'excluded_spend_categories', '[]'::jsonb) ? 'streaming';
+
+        UPDATE transactions
+        SET category_id = 'subscription_streaming'
+        WHERE category_id = 'streaming';
+
+        UPDATE statement_import_transactions
+        SET category_id = 'subscription_streaming'
+        WHERE category_id = 'streaming';
+
+        UPDATE transaction_category_rules
+        SET category_id = 'subscription_streaming'
+        WHERE category_id = 'streaming';
+
+        UPDATE transactions
+        SET category_id = 'restaurant_coffee'
+        WHERE category_id = 'restaurants'
+          AND category_detailed = 'FOOD_AND_DRINK_COFFEE'
+          AND category_rule_exempt = FALSE;
+
+        UPDATE transaction_category_rules rule
+        SET category_id = 'restaurant_coffee'
+        WHERE rule.category_type = 'expense'
+          AND rule.category_id = 'restaurants'
+          AND EXISTS (
+              SELECT 1
+              FROM transactions txn
+              WHERE txn.category_match_key = rule.match_key
+                AND txn.category_detailed = 'FOOD_AND_DRINK_COFFEE'
+                AND txn.category_rule_exempt = FALSE
+          );
+
+        INSERT INTO app_schema_migrations (migration_id)
+        VALUES ('secondary-expense-categories-v1');
+    END IF;
+END $$;
 
 INSERT INTO transaction_category_rules (category_type, match_key, category_id)
 SELECT DISTINCT ON (transaction_category_match_key(t.merchant_name, t.name, t.account_id, TRUE))
