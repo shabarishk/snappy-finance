@@ -3397,7 +3397,10 @@ export default function App() {
       ) : (
         <div className="account-type-list">
           {accountTypeGroups.map((group) => {
-            const groupTotal = group.accounts.reduce((sum, account) => sum + (account.current_balance ?? 0), 0);
+            const groupTotal = group.accounts.reduce(
+              (sum, account) => sum + (account.excluded_from_calculations ? 0 : account.current_balance ?? 0),
+              0,
+            );
             return (
               <section className="panel account-type-section" key={group.type}>
                 <header className="account-type-heading">
