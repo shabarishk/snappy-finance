@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, Banknote, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Eye, EyeOff, FileText, Filter, Landmark, LockKeyhole, LogOut, Menu, Plus, RefreshCw, UsersRound, Wallet, X } from "lucide-react";
+import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, Banknote, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Eye, EyeOff, FileText, Filter, Landmark, LockKeyhole, LogOut, Menu, MoreVertical, Plus, RefreshCw, UsersRound, Wallet, X } from "lucide-react";
 
 type Profile = {
   id: string;
@@ -773,6 +773,8 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [syncingConnectionID, setSyncingConnectionID] = useState<string | null>(null);
   const [unlinkingConnectionID, setUnlinkingConnectionID] = useState<string | null>(null);
+  const [connectionsManagerOpen, setConnectionsManagerOpen] = useState(false);
+  const [unlinkConfirmationID, setUnlinkConfirmationID] = useState<string | null>(null);
   const [updatingConsentConnectionID, setUpdatingConsentConnectionID] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -808,6 +810,10 @@ export default function App() {
     if (activePage !== "transactions") setTransactionFiltersOpen(false);
     if (activePage !== "projections") setProjectionAssumptionsOpen(false);
     if (activePage !== "projections") setScheduledExpensesOpen(false);
+    if (activePage !== "accounts") {
+      setConnectionsManagerOpen(false);
+      setUnlinkConfirmationID(null);
+    }
     if (activePage !== "statements") {
       setStatementUploadOpen(false);
       setExpandedStatementID(null);
@@ -1257,6 +1263,16 @@ export default function App() {
       };
     });
   }, [accounts]);
+  const unlinkConfirmationConnection = accountConnections.find((connection) => connection.itemID === unlinkConfirmationID);
+  const accountTypeGroups = useMemo(() => accountCategories.map(({ type, label }) => ({
+    type,
+    label,
+    accounts: accounts.filter((account) => account.type.toLowerCase() === type),
+  })).concat([{
+    type: "other",
+    label: "Other accounts",
+    accounts: accounts.filter((account) => !accountCategories.some(({ type }) => account.type.toLowerCase() === type)),
+  }]).filter((group) => group.accounts.length > 0), [accounts]);
   const cashAccounts = useMemo(
     () => accounts.filter((account) => account.type.toLowerCase() === "depository" && !account.excluded_from_calculations),
     [accounts],
@@ -2929,12 +2945,6 @@ export default function App() {
   }
 
   async function unlinkAccountConnection(connection: (typeof accountConnections)[number]) {
-    const accountNames = connection.accounts.map((account) => account.official_name || account.name).join(", ");
-    const confirmed = window.confirm(
-      `Unlink this Plaid connection? This will remove ${connection.accounts.length} linked account${connection.accounts.length === 1 ? "" : "s"} (${accountNames}), synced transactions, and Plaid statement balances. Imported PDF statement history will remain available. Scheduled payments will remain but be detached from these accounts.`,
-    );
-    if (!confirmed) return;
-
     setUnlinkingConnectionID(connection.itemID);
     setError("");
     setNotice("");
@@ -2948,6 +2958,7 @@ export default function App() {
       setExpendableAccountSelection("");
       setStatementAccountSelection("");
       await refresh();
+      setUnlinkConfirmationID(null);
       setNotice(`Plaid connection unlinked. ${result.accounts_removed} account${result.accounts_removed === 1 ? "" : "s"} removed.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not unlink this Plaid connection");
@@ -3368,111 +3379,86 @@ export default function App() {
   );
 
   const accountsPanel = (
-    <section className="panel settings-panel accounts-panel">
-      <div className="panel-heading">
-        <div><h2>Connected accounts</h2><p>Exclude an account from household calculations without removing its transactions or Plaid connection.</p></div>
+    <section className="accounts-workspace">
+      <div className="accounts-page-heading">
+        <div><h2>Your accounts</h2><p>Balances and account settings organized by account type.</p></div>
+        {profile?.role === "admin" && accountConnections.length > 0 && (
+          <button type="button" className="secondary-button" onClick={() => setConnectionsManagerOpen(true)}>
+            <MoreVertical size={16} /> Manage connections
+          </button>
+        )}
       </div>
-      {loading ? <div className="empty-state">Loading accounts…</div> : accountConnections.length === 0 ? (
-        <div className="empty-state">
+      {loading ? <div className="panel empty-state">Loading accounts…</div> : accountTypeGroups.length === 0 ? (
+        <div className="panel empty-state">
           <span className="empty-icon"><Landmark size={22} /></span>
           <strong>No accounts connected yet</strong>
           <span>{profile?.role === "admin" ? "Connect a bank to see balances and transactions." : "Ask your household administrator to connect a bank account."}</span>
         </div>
       ) : (
-        <>
-          <p className="finance-help account-sync-help">Plaid syncs transactions per connection. Syncing an account refreshes all accounts in that connection. For credit-card statement data, an administrator can request additional Plaid consent; the account holder must complete the Link flow. Unlinking removes the connection and its synced data.</p>
-          <div className="account-connections">
-            {accountConnections.map((connection) => {
-              const creditAccount = connection.accounts.find((account) => account.type.toLowerCase() === "credit");
-              return (
-              <section className="account-connection" key={connection.itemID}>
-                <header className="account-connection-heading">
+        <div className="account-type-list">
+          {accountTypeGroups.map((group) => {
+            const groupTotal = group.accounts.reduce((sum, account) => sum + (account.current_balance ?? 0), 0);
+            return (
+              <section className="panel account-type-section" key={group.type}>
+                <header className="account-type-heading">
                   <div>
-                    <h3>Plaid connection</h3>
-                    <span>{connection.accounts.length} linked account{connection.accounts.length === 1 ? "" : "s"} · {connection.lastSyncedAt ? `Last synced ${new Date(connection.lastSyncedAt).toLocaleString()}` : "Not synced yet"}{connection.demoData ? " · DEMO" : ""}</span>
+                    <span className="account-type-icon"><Landmark size={18} /></span>
+                    <div><h2>{group.label}</h2><p>{group.accounts.length} account{group.accounts.length === 1 ? "" : "s"}</p></div>
                   </div>
-                  {profile?.role === "admin" && !connection.demoData && (
-                    <div className="account-connection-actions">
-                      {creditAccount && (
-                        <button
-                          type="button"
-                          className="secondary-button"
-                          disabled={busy || syncingConnectionID === connection.itemID || updatingConsentConnectionID !== null || unlinkingConnectionID === connection.itemID}
-                          onClick={() => void requestLiabilitiesConsent(creditAccount)}
-                        >{updatingConsentConnectionID === connection.itemID ? "Updating access…" : "Request statement consent"}</button>
-                      )}
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        disabled={busy || syncingConnectionID === connection.itemID || updatingConsentConnectionID !== null || unlinkingConnectionID === connection.itemID}
-                        onClick={() => void unlinkAccountConnection(connection)}
-                      >{unlinkingConnectionID === connection.itemID ? "Unlinking…" : "Unlink connection"}</button>
-                    </div>
-                  )}
+                  <strong>{money(groupTotal)}</strong>
                 </header>
-                {connection.groups.map((group) => (
-                  <section className="account-group" key={group.label}>
-                    <div className="account-group-heading">
-                      <h3>{group.label}</h3>
-                      <span>{group.accounts.length}</span>
-                    </div>
-                    {group.accounts.map((account) => {
-                      const syncing = syncingConnectionID === account.item_id;
-                      return (
-                        <div className="account-statement-row" key={account.account_id}>
-                          <div className="account-row">
-                            <span className="account-icon"><Landmark size={18} /></span>
-                            <div className="account-info"><strong>{account.official_name || account.name}</strong><span>{account.type}{account.subtype ? ` · ${account.subtype}` : ""}{account.mask ? ` ···· ${account.mask}` : ""}{account.demo_data ? " · DEMO" : ""}{account.excluded_from_calculations ? " · Excluded from calculations" : ""}</span></div>
-                            <strong className="account-balance">{money(account.current_balance, account.iso_currency_code)}</strong>
-                            {profile?.role === "admin" && !account.demo_data && (
-                              <div className="account-actions">
-                                <button
-                                  type="button"
-                                  className="secondary-button"
-                                  disabled={busy || syncing || updatingConsentConnectionID !== null || unlinkingConnectionID === account.item_id}
-                                  onClick={() => void syncAccount(account)}
-                                ><RefreshCw size={14} className={syncing ? "spin" : ""} /> {syncing ? "Syncing" : "Sync transactions"}</button>
-                              </div>
-                            )}
+                <div className="account-type-rows">
+                  {group.accounts.map((account) => {
+                    const connection = accountConnections.find((item) => item.itemID === account.item_id);
+                    return (
+                      <article className="account-statement-row account-type-row" key={account.account_id}>
+                        <div className="account-row">
+                          <span className="account-icon"><Landmark size={18} /></span>
+                          <div className="account-info">
+                            <strong>{account.official_name || account.name}</strong>
+                            <span>{account.subtype || account.type}{account.mask ? ` ···· ${account.mask}` : ""}</span>
+                            <small className="account-connection-status">
+                              {account.demo_data ? "Demo account" : account.last_synced_at ? `Synced ${new Date(account.last_synced_at).toLocaleString()}` : "Connected · not synced yet"}
+                              {account.excluded_from_calculations ? " · Excluded from calculations" : ""}
+                            </small>
                           </div>
+                          <strong className="account-balance">{money(account.current_balance, account.iso_currency_code)}</strong>
                           {profile?.role === "admin" && (
-                            <label className="account-calculation-control">
-                              <input
-                                type="checkbox"
-                                checked={!account.excluded_from_calculations}
-                                disabled={updatingAccountCalculationID === account.account_id}
-                                onChange={(event) => void setAccountCalculationExclusion(account, !event.target.checked)}
-                                aria-label={`Include ${account.official_name || account.name} in financial calculations`}
-                              />
-                              <span>Include in financial calculations</span>
-                            </label>
-                          )}
-                          {profile?.role === "admin" && !account.demo_data && (
-                            <label className="account-parser-control">
-                              <span>Statement parser</span>
-                              <select
-                                value={account.statement_parser_id ?? ""}
-                                disabled={savingStatementParserAccountID === account.account_id}
-                                onChange={(event) => void saveAccountStatementParser(account.account_id, event.target.value)}
-                                aria-label={`Statement parser for ${account.official_name || account.name}`}
-                              >
-                                <option value="">None</option>
-                                {statementParsers.map((parser) => (
-                                  <option key={parser.parser_id} value={parser.parser_id}>{parser.display_name}</option>
-                                ))}
-                              </select>
-                            </label>
+                            <details className="account-actions-menu">
+                              <summary aria-label={`More options for ${account.official_name || account.name}`}><MoreVertical size={18} /></summary>
+                              <div className="account-actions-popover">
+                                <button type="button" onClick={() => navigateToPage("transactions")}>View transactions</button>
+                                {connection && !account.demo_data && (
+                                  <button type="button" disabled={busy || syncingConnectionID === connection.itemID || updatingConsentConnectionID !== null || unlinkingConnectionID === connection.itemID} onClick={() => void syncAccount(account)}>
+                                    <RefreshCw size={14} /> {syncingConnectionID === connection.itemID ? "Syncing…" : "Refresh connection"}
+                                  </button>
+                                )}
+                                <label className="account-menu-check">
+                                  <input type="checkbox" checked={!account.excluded_from_calculations} disabled={updatingAccountCalculationID === account.account_id} onChange={(event) => void setAccountCalculationExclusion(account, !event.target.checked)} />
+                                  Include in calculations
+                                </label>
+                                {!account.demo_data && (
+                                  <label className="account-menu-field">
+                                    <span>Statement parser</span>
+                                    <select value={account.statement_parser_id ?? ""} disabled={savingStatementParserAccountID === account.account_id} onChange={(event) => void saveAccountStatementParser(account.account_id, event.target.value)}>
+                                      <option value="">None</option>
+                                      {statementParsers.map((parser) => <option key={parser.parser_id} value={parser.parser_id}>{parser.display_name}</option>)}
+                                    </select>
+                                  </label>
+                                )}
+                                <button type="button" className="muted-action" onClick={() => setConnectionsManagerOpen(true)}>Manage Plaid connection</button>
+                              </div>
+                            </details>
                           )}
                         </div>
-                      );
-                    })}
-                  </section>
-                ))}
+                      </article>
+                    );
+                  })}
+                </div>
               </section>
-              );
-            })}
-          </div>
-        </>
+            );
+          })}
+        </div>
       )}
     </section>
   );
@@ -3685,6 +3671,58 @@ export default function App() {
 
         {error && <div className="alert error-message">{error}</div>}
         {notice && <div className="alert success-message">{notice}</div>}
+
+        {connectionsManagerOpen && activePage === "accounts" && (
+          <div className="dashboard-preferences-backdrop visible">
+            <button type="button" className="drawer-backdrop-button" aria-label="Close connection manager" onClick={() => setConnectionsManagerOpen(false)} />
+            <aside className="dashboard-preferences-drawer connections-manager-drawer open" role="dialog" aria-modal="true" aria-labelledby="connections-manager-title">
+              <section className="panel settings-panel">
+                <div className="panel-heading preferences-drawer-heading">
+                  <div><h2 id="connections-manager-title">Plaid connections</h2><p>Connection-level syncing and access controls. Unlinking affects every account listed under a connection.</p></div>
+                  <button type="button" className="preferences-drawer-close" aria-label="Close connection manager" onClick={() => setConnectionsManagerOpen(false)}><X size={18} /></button>
+                </div>
+                <div className="connection-manager-list">
+                  {accountConnections.map((connection, index) => {
+                    const creditAccount = connection.accounts.find((account) => account.type.toLowerCase() === "credit");
+                    return (
+                      <article className="connection-manager-card" key={connection.itemID}>
+                        <div className="connection-manager-heading">
+                          <div><strong>Plaid connection {index + 1}</strong><span>{connection.accounts.length} account{connection.accounts.length === 1 ? "" : "s"} · {connection.lastSyncedAt ? `Synced ${new Date(connection.lastSyncedAt).toLocaleString()}` : "Not synced yet"}{connection.demoData ? " · Demo" : ""}</span></div>
+                          {!connection.demoData && (
+                            <details className="account-actions-menu connection-menu">
+                              <summary aria-label={`Options for Plaid connection ${index + 1}`}><MoreVertical size={18} /></summary>
+                              <div className="account-actions-popover">
+                                <button type="button" disabled={busy || syncingConnectionID === connection.itemID || updatingConsentConnectionID !== null || unlinkingConnectionID === connection.itemID} onClick={() => void syncAccount(connection.accounts[0])}><RefreshCw size={14} /> Refresh connection</button>
+                                {creditAccount && <button type="button" disabled={busy || syncingConnectionID === connection.itemID || updatingConsentConnectionID !== null || unlinkingConnectionID === connection.itemID} onClick={() => void requestLiabilitiesConsent(creditAccount)}>Refresh statement access</button>}
+                                <button type="button" className="danger-action" disabled={busy || syncingConnectionID === connection.itemID || updatingConsentConnectionID !== null || unlinkingConnectionID === connection.itemID} onClick={() => setUnlinkConfirmationID(connection.itemID)}>Unlink connection</button>
+                              </div>
+                            </details>
+                          )}
+                        </div>
+                        <ul>{connection.accounts.map((account) => <li key={account.account_id}><span>{account.official_name || account.name}</span><small>{account.subtype || account.type}{account.mask ? ` ···· ${account.mask}` : ""}</small></li>)}</ul>
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
+            </aside>
+          </div>
+        )}
+
+        {unlinkConfirmationConnection && (
+          <div className="category-scope-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && unlinkingConnectionID === null) setUnlinkConfirmationID(null); }}>
+            <section className="category-scope-dialog unlink-dialog" role="dialog" aria-modal="true" aria-labelledby="unlink-dialog-title">
+              <h2 id="unlink-dialog-title">Unlink this Plaid connection?</h2>
+              <p>The following {unlinkConfirmationConnection.accounts.length} account{unlinkConfirmationConnection.accounts.length === 1 ? "" : "s"} will be removed:</p>
+              <ul className="unlink-account-list">{unlinkConfirmationConnection.accounts.map((account) => <li key={account.account_id}><Landmark size={16} /><span><strong>{account.official_name || account.name}</strong><small>{account.subtype || account.type}{account.mask ? ` ···· ${account.mask}` : ""}</small></span></li>)}</ul>
+              <div className="unlink-impact"><strong>This cannot be undone.</strong><ul><li>Synced transactions and Plaid statement balances will be removed.</li><li>Future automatic syncing for this connection will stop.</li><li>Imported PDF statement history will remain available.</li><li>Scheduled payments will remain but be detached from these accounts.</li><li>Other Plaid connections will not be affected.</li></ul></div>
+              <div className="category-scope-actions">
+                <button type="button" className="secondary-button" disabled={unlinkingConnectionID !== null} onClick={() => setUnlinkConfirmationID(null)}>Cancel</button>
+                <button type="button" className="danger-button" disabled={unlinkingConnectionID !== null} onClick={() => void unlinkAccountConnection(unlinkConfirmationConnection)}>{unlinkingConnectionID ? "Unlinking…" : `Unlink ${unlinkConfirmationConnection.accounts.length} account${unlinkConfirmationConnection.accounts.length === 1 ? "" : "s"}`}</button>
+              </div>
+            </section>
+          </div>
+        )}
 
         {pendingCategoryChange && (
           <div
